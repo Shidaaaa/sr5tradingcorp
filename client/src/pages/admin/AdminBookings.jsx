@@ -1,12 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '../../api';
 import toast from 'react-hot-toast';
-import { FiCheck, FiX, FiEye, FiUserX, FiTruck, FiSearch, FiStar, FiCreditCard } from 'react-icons/fi';
+import { FiCheck, FiX, FiEye, FiUserX, FiTruck, FiSearch } from 'react-icons/fi';
 import Pagination from '../../components/Pagination';
 import SortHeader from '../../components/SortHeader';
-import ReservationCountdown from '../../components/ReservationCountdown';
-
-const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price);
 
 const statusConfig = {
   pending: { color: 'badge-warning', label: 'Pending' },
@@ -103,8 +100,6 @@ export default function AdminBookings() {
               <th className="px-4 py-3"><SortHeader label="Date" field="preferred_date" sortField={sortField} sortDir={sortDir} onSort={handleSort} /></th>
               <th className="px-4 py-3 font-medium">Time</th>
               <th className="px-4 py-3 font-medium">Receive</th>
-              <th className="px-4 py-3 font-medium">Reservation Fee</th>
-              <th className="px-4 py-3 font-medium">Re-listed In</th>
               <th className="px-4 py-3"><SortHeader label="Status" field="status" sortField={sortField} sortDir={sortDir} onSort={handleSort} /></th>
               <th className="px-4 py-3 font-medium">Actions</th>
             </tr></thead>
@@ -120,25 +115,6 @@ export default function AdminBookings() {
                     <td className="px-4 py-3">{b.preferred_date}</td>
                     <td className="px-4 py-3">{b.preferred_time} - {b.end_time}</td>
                     <td className="px-4 py-3 capitalize">{b.delivery_method}</td>
-                    <td className="px-4 py-3">
-                      {b.reservation_fee > 0 ? (
-                        <div>
-                          <div className="flex items-center gap-1">
-                            {b.product_is_popular && <FiStar size={11} className="text-amber-500" />}
-                            <span className="font-medium text-accent-700">{formatPrice(b.reservation_fee)}</span>
-                          </div>
-                          {b.reservation_fee_paid
-                            ? <span className="text-xs text-green-600 flex items-center gap-0.5 mt-0.5"><FiCreditCard size={10} /> Paid</span>
-                            : <span className="text-xs text-red-500 mt-0.5">Unpaid</span>
-                          }
-                        </div>
-                      ) : <span className="text-gray-400">-</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      {b.reservation_expires_at && ['pending','approved'].includes(b.status)
-                        ? <ReservationCountdown expiresAt={b.reservation_expires_at} compact />
-                        : <span className="text-gray-400">-</span>}
-                    </td>
                     <td className="px-4 py-3">
                       <span className={`badge ${sc.color}`}>{sc.label}</span>
                       {b.pickup_confirmed && <p className="text-xs text-green-600 mt-1">✓ Picked up</p>}

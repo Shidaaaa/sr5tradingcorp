@@ -8,6 +8,28 @@ import { FiShoppingCart, FiCalendar, FiMapPin, FiTag, FiInfo, FiArrowLeft, FiMin
 
 const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price);
 
+const FALLBACK_IMAGES = {
+  truck: 'https://images.unsplash.com/photo-1580674285054-bed31e145f59?auto=format&fit=crop&w=1400&q=80',
+  tractor: 'https://images.unsplash.com/photo-1592982537447-7440770cbfc9?auto=format&fit=crop&w=1400&q=80',
+  van: 'https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=1400&q=80',
+  vehicle: 'https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&w=1400&q=80',
+  parts: 'https://images.unsplash.com/photo-1635764706136-18f6be2d0f5b?auto=format&fit=crop&w=1400&q=80',
+  tools: 'https://images.unsplash.com/photo-1581147036324-c47a03a81d48?auto=format&fit=crop&w=1400&q=80',
+};
+
+const pickFallbackImage = (product) => {
+  const name = (product?.name || '').toLowerCase();
+  const vehicleCategory = (product?.vehicle_category || '').toLowerCase();
+  const type = (product?.type || '').toLowerCase();
+
+  if (vehicleCategory.includes('truck') || name.includes('truck')) return FALLBACK_IMAGES.truck;
+  if (vehicleCategory.includes('tractor') || name.includes('tractor')) return FALLBACK_IMAGES.tractor;
+  if (vehicleCategory.includes('van') || name.includes('van')) return FALLBACK_IMAGES.van;
+  if (type === 'vehicle') return FALLBACK_IMAGES.vehicle;
+  if (type === 'tools') return FALLBACK_IMAGES.tools;
+  return FALLBACK_IMAGES.parts;
+};
+
 export default function ProductDetail() {
   const { id } = useParams();
   const [product, setProduct] = useState(null);
@@ -33,6 +55,12 @@ export default function ProductDetail() {
 
   const specs = product?.specifications ? JSON.parse(product.specifications) : {};
 
+  const resolveImageSrc = (imageUrl) => {
+    if (!imageUrl) return '';
+    if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+    return imageUrl;
+  };
+
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-navy-900"></div></div>;
   if (!product) return null;
 
@@ -53,10 +81,11 @@ export default function ProductDetail() {
           {/* Image */}
           <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
             <div className="aspect-square bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center relative">
-              <div className="text-center text-gray-400">
-                <FiTag size={80} className="mx-auto mb-2" />
-                <span className="text-sm">No image available</span>
-              </div>
+              <img
+                src={product.image_url ? resolveImageSrc(product.image_url) : pickFallbackImage(product)}
+                alt={product.name}
+                className="absolute inset-0 w-full h-full object-cover"
+              />
               {product.status === 'sold_out' && (
                 <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
                   <span className="bg-red-600 text-white text-lg font-bold px-6 py-2 rounded-full">SOLD OUT</span>

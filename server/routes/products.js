@@ -1,10 +1,37 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
 const InventoryLog = require('../models/InventoryLog');
 const { authenticateToken, requireAdmin, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
+
+const productUploadsDir = path.join(__dirname, '..', 'uploads', 'products');
+if (!fs.existsSync(productUploadsDir)) {
+  fs.mkdirSync(productUploadsDir, { recursive: true });
+}
+
+const productImageStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, productUploadsDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    cb(null, `product-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+  },
+});
+
+const uploadProductImage = multer({
+  storage: productImageStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only image files are allowed.'));
+    }
+    cb(null, true);
+  },
+});
 
 // Get all products
 router.get('/', optionalAuth, async (req, res) => {
@@ -62,6 +89,19 @@ router.post('/meta/categories', authenticateToken, requireAdmin, async (req, res
   } catch (err) {
     if (err.code === 11000) return res.status(400).json({ error: 'Category already exists.' });
     res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// Admin: Upload product image
+router.post('/upload-image', authenticateToken, requireAdmin, uploadProductImage.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Image file is required.' });
+    res.status(201).json({
+      image_url: `/uploads/products/${req.file.filename}`,
+      filename: req.file.filename,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error uploading image.' });
   }
 });
 

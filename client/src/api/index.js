@@ -2,9 +2,10 @@ const API_BASE = '/api';
 
 async function apiRequest(endpoint, options = {}) {
   const token = localStorage.getItem('sr5_token');
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const config = {
     headers: {
-      'Content-Type': 'application/json',
+      ...(!isFormData && { 'Content-Type': 'application/json' }),
       ...(token && { Authorization: `Bearer ${token}` }),
       ...options.headers,
     },
@@ -39,6 +40,11 @@ export const api = {
   getCategories: () => apiRequest('/products/meta/categories'),
   createProduct: (data) => apiRequest('/products', { method: 'POST', body: JSON.stringify(data) }),
   updateProduct: (id, data) => apiRequest(`/products/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  uploadProductImage: (file) => {
+    const formData = new FormData();
+    formData.append('image', file);
+    return apiRequest('/products/upload-image', { method: 'POST', body: formData });
+  },
   reorderProduct: (id, data) => apiRequest(`/products/${id}/reorder`, { method: 'POST', body: JSON.stringify(data) }),
   createCategory: (data) => apiRequest('/products/meta/categories', { method: 'POST', body: JSON.stringify(data) }),
 
@@ -58,6 +64,7 @@ export const api = {
   // Bookings
   getBookings: () => apiRequest('/bookings'),
   getReservationFee: (productId) => apiRequest(`/bookings/reservation-fee/${productId}`),
+  getBookingAvailability: (productId, date) => apiRequest(`/bookings/availability/${productId || 'global'}?date=${encodeURIComponent(date)}`),
   createBooking: (data) => apiRequest('/bookings', { method: 'POST', body: JSON.stringify(data) }),
   updateBookingStatus: (id, data) => apiRequest(`/bookings/${id}/status`, { method: 'PUT', body: JSON.stringify(data) }),
   confirmPickup: (id) => apiRequest(`/bookings/${id}/confirm-pickup`, { method: 'PUT' }),
@@ -86,7 +93,11 @@ export const api = {
   // Admin
   getStats: () => apiRequest('/admin/stats'),
   getAdminOrders: (status) => apiRequest(`/admin/orders${status ? '?status=' + status : ''}`),
+  getAdminInstallmentClients: () => apiRequest('/admin/orders/installments'),
   updateAdminOrderStatus: (id, data) => apiRequest(`/admin/orders/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  recordAdminPickupPayment: (id, data) => apiRequest(`/admin/orders/${id}/pickup-payment`, { method: 'POST', body: JSON.stringify(data) }),
+  markAdminOrderPaid: (id, data) => apiRequest(`/admin/orders/${id}/mark-paid`, { method: 'POST', body: JSON.stringify(data) }),
+  markAdminInstallmentPaid: (id, installmentNumber) => apiRequest(`/admin/orders/${id}/installments/${installmentNumber}`, { method: 'PUT' }),
   getAdminBookings: (status) => apiRequest(`/admin/bookings${status ? '?status=' + status : ''}`),
   updateAdminBookingStatus: (id, data) => apiRequest(`/admin/bookings/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   getAdminFeedback: () => apiRequest('/admin/feedback'),

@@ -2,18 +2,85 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import toast from 'react-hot-toast';
-import { FiCalendar, FiClock, FiPlus, FiMapPin, FiTruck, FiCheckCircle, FiXCircle, FiCreditCard, FiStar } from 'react-icons/fi';
+import { FiCalendar, FiClock, FiPlus, FiCheckCircle, FiXCircle, FiCreditCard, FiStar } from 'react-icons/fi';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
 import ReservationCountdown from '../components/ReservationCountdown';
 
 const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price);
 
-const formatDateInput = (date) => date.toISOString().split('T')[0];
-
-const getBookingMaxDate = (productType) => {
-  const maxDate = new Date();
-  maxDate.setDate(maxDate.getDate() + (productType === 'vehicle' ? 30 : 90));
-  return formatDateInput(maxDate);
+const formatDateInput = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
+
+const HOLIDAY_MM_DD = new Set([
+  '01-01',
+  '04-09',
+  '05-01',
+  '06-12',
+  '08-21',
+  '11-01',
+  '11-30',
+  '12-08',
+  '12-25',
+  '12-30',
+  '12-31',
+]);
+
+const isHolidayDate = (date) => HOLIDAY_MM_DD.has(`${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`);
+
+const isBlockedBookingDate = (date) => date.getDay() === 0 || isHolidayDate(date);
+
+const getRollingMaxDate = () => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59, 999);
+};
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SERVICE_OPTIONS = [
+  'Change Oil and Filter',
+  'Engine Tune-Up',
+  'Brake Inspection and Service',
+  'Battery Check and Replacement',
+  'Wheel Alignment and Balancing',
+  'Tire Rotation and Replacement',
+  'Air Conditioning Service',
+  'Electrical System Diagnostics',
+  'Suspension and Steering Check',
+  'General Preventive Maintenance',
+];
+
+const buildTimeSlots = (start = '08:00', end = '17:00', intervalMinutes = 15) => {
+  const [startH, startM] = start.split(':').map(Number);
+  const [endH, endM] = end.split(':').map(Number);
+  const startTotal = (startH * 60) + startM;
+  const endTotal = (endH * 60) + endM;
+
+  const slots = [];
+  for (let t = startTotal; t <= endTotal; t += intervalMinutes) {
+    const h = String(Math.floor(t / 60)).padStart(2, '0');
+    const m = String(t % 60).padStart(2, '0');
+    slots.push(`${h}:${m}`);
+  }
+  return slots;
+};
+
+const toTwelveHourTime = (time24) => {
+  if (!time24 || !time24.includes(':')) return time24;
+  const [hourText, minuteText] = time24.split(':');
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return time24;
+
+  const period = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, '0')} ${period}`;
+};
+
+const BOOKING_TIME_SLOTS = buildTimeSlots('08:00', '17:00', 15);
 
 const statusConfig = {
   pending: { color: 'badge-warning', label: 'Pending' },
@@ -33,30 +100,54 @@ export default function Bookings() {
   const [form, setForm] = useState({
     booking_type: 'test_drive',
     product_id: searchParams.get('product_id') || '',
+    service_type: '',
     preferred_date: '',
     preferred_time: '',
-    delivery_method: 'pickup',
     notes: '',
   });
-  const [feeInfo, setFeeInfo] = useState(null);
   const [payingFee, setPayingFee] = useState(null);
   const [payMethod, setPayMethod] = useState('cash');
   const [processingOnline, setProcessingOnline] = useState(false);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  const [unavailableTimes, setUnavailableTimes] = useState([]);
+  const [availableTimes, setAvailableTimes] = useState(BOOKING_TIME_SLOTS);
 
   const selectedProduct = products.find(p => String(p.id) === String(form.product_id));
-  const selectedProductType = selectedProduct?.type || (form.booking_type === 'test_drive' ? 'vehicle' : 'general');
+  const isVehicleBooking = form.booking_type === 'test_drive' || form.booking_type === 'vehicle_viewing';
+  const isServiceAppointment = form.booking_type === 'service_appointment';
+  const filteredProducts = isVehicleBooking ? products.filter(p => p.type === 'vehicle') : [];
   const minBookingDate = formatDateInput(new Date());
-  const maxBookingDate = getBookingMaxDate(selectedProductType);
+  const maxBookingDate = formatDateInput(getRollingMaxDate());
+  const minBookingDateObj = new Date(`${minBookingDate}T00:00:00`);
+  const maxBookingDateObj = new Date(`${maxBookingDate}T23:59:59`);
+  const currentYear = minBookingDateObj.getFullYear();
+  const maxYear = maxBookingDateObj.getFullYear();
+  const allowedYears = Array.from({ length: (maxYear - currentYear) + 1 }, (_, idx) => currentYear + idx);
 
   useEffect(() => { fetchBookings(); fetchProducts(); }, []);
 
-  // Fetch reservation fee whenever product selection changes
   useEffect(() => {
-    if (!form.product_id) { setFeeInfo(null); return; }
-    const selected = products.find(p => String(p.id) === String(form.product_id));
-    if (!selected || selected.type !== 'vehicle') { setFeeInfo(null); return; }
-    api.getReservationFee(form.product_id).then(setFeeInfo).catch(() => setFeeInfo(null));
-  }, [form.product_id, products]);
+    if (!form.preferred_date || (isVehicleBooking && !form.product_id) || (isServiceAppointment && !form.service_type)) {
+      setUnavailableTimes([]);
+      setAvailableTimes(BOOKING_TIME_SLOTS);
+      return;
+    }
+    setAvailabilityLoading(true);
+    api.getBookingAvailability(form.product_id || 'global', form.preferred_date)
+      .then(data => {
+        setUnavailableTimes(data.unavailable_times || []);
+        setAvailableTimes(data.available_times || BOOKING_TIME_SLOTS);
+        if (form.preferred_time && (data.unavailable_times || []).includes(form.preferred_time)) {
+          setForm(prev => ({ ...prev, preferred_time: '' }));
+          toast.error('Selected time is no longer available. Please choose another slot.');
+        }
+      })
+      .catch(() => {
+        setUnavailableTimes([]);
+        setAvailableTimes(BOOKING_TIME_SLOTS);
+      })
+      .finally(() => setAvailabilityLoading(false));
+  }, [form.product_id, form.service_type, form.preferred_date, isVehicleBooking, isServiceAppointment]);
 
   const fetchBookings = async () => {
     try { setBookings(await api.getBookings()); } catch {} finally { setLoading(false); }
@@ -66,12 +157,49 @@ export default function Bookings() {
     try { setProducts(await api.getProducts()); } catch {}
   };
 
+  const handlePreferredDateChange = (value) => {
+    if (!value) {
+      setForm({ ...form, preferred_date: value });
+      return;
+    }
+
+    const pickedDate = new Date(`${value}T00:00:00`);
+    if (isBlockedBookingDate(pickedDate)) {
+      toast.error(pickedDate.getDay() === 0
+        ? 'Bookings are not available on Sundays.'
+        : 'Bookings are not available on holidays.');
+      setForm({ ...form, preferred_date: '' });
+      return;
+    }
+
+    setForm({ ...form, preferred_date: value });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isVehicleBooking && !form.product_id) {
+      toast.error('Please select a vehicle for this booking type.');
+      return;
+    }
+    if (isServiceAppointment && !form.service_type) {
+      toast.error('Please select a service for your appointment.');
+      return;
+    }
     if (form.preferred_date && form.preferred_date > maxBookingDate) {
-      toast.error(selectedProductType === 'vehicle'
-        ? 'Vehicle bookings can only be scheduled up to 1 month in advance.'
-        : 'Tools, parts, and other item bookings can only be scheduled up to 3 months in advance.');
+      toast.error('Bookings can only be scheduled from the current month up to the next month.');
+      return;
+    }
+    if (form.preferred_date) {
+      const pickedDate = new Date(`${form.preferred_date}T00:00:00`);
+      if (isBlockedBookingDate(pickedDate)) {
+        toast.error(pickedDate.getDay() === 0
+          ? 'Bookings are not available on Sundays.'
+          : 'Bookings are not available on holidays.');
+        return;
+      }
+    }
+    if (form.preferred_time && unavailableTimes.includes(form.preferred_time)) {
+      toast.error('This time slot is already booked. Please choose another time.');
       return;
     }
     try {
@@ -82,8 +210,7 @@ export default function Bookings() {
         toast.success('Booking created! Waiting for admin approval.');
       }
       setShowForm(false);
-      setFeeInfo(null);
-      setForm({ booking_type: 'test_drive', product_id: '', preferred_date: '', preferred_time: '', delivery_method: 'pickup', notes: '' });
+      setForm({ booking_type: 'test_drive', product_id: '', service_type: '', preferred_date: '', preferred_time: '', notes: '' });
       fetchBookings();
     } catch (err) { toast.error(err.message); }
   };
@@ -130,40 +257,108 @@ export default function Bookings() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Booking Type *</label>
-              <select value={form.booking_type} onChange={e => setForm({ ...form, booking_type: e.target.value })} className="input-field">
+              <select
+                value={form.booking_type}
+                onChange={e => setForm({ ...form, booking_type: e.target.value, product_id: '', service_type: '', preferred_time: '' })}
+                className="input-field"
+              >
                 <option value="test_drive">Test Drive</option>
                 <option value="vehicle_viewing">Vehicle Viewing</option>
                 <option value="service_appointment">Service / Maintenance</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Product / Vehicle</label>
-              <select value={form.product_id} onChange={e => setForm({ ...form, product_id: e.target.value })} className="input-field">
-                <option value="">Select product...</option>
-                {products.filter(p => form.booking_type !== 'test_drive' || p.type === 'vehicle').map(p => (
-                  <option key={p.id} value={p.id}>{p.name}{p.is_popular ? ' ★' : ''}</option>
-                ))}
-              </select>
+              {isVehicleBooking ? (
+                <>
+                  <label className="block text-sm font-medium mb-1">Vehicle *</label>
+                  <select value={form.product_id} onChange={e => setForm({ ...form, product_id: e.target.value, preferred_time: '' })} className="input-field" required>
+                    <option value="">Select vehicle...</option>
+                    {filteredProducts.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}{p.is_popular ? ' ★' : ''}</option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <>
+                  <label className="block text-sm font-medium mb-1">Service Needed *</label>
+                  <select value={form.service_type} onChange={e => setForm({ ...form, service_type: e.target.value, preferred_time: '' })} className="input-field" required>
+                    <option value="">Select service...</option>
+                    {SERVICE_OPTIONS.map(service => (
+                      <option key={service} value={service}>{service}</option>
+                    ))}
+                  </select>
+                </>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Preferred Date *</label>
-              <input type="date" value={form.preferred_date} onChange={e => setForm({ ...form, preferred_date: e.target.value })} className="input-field" min={minBookingDate} max={maxBookingDate} required />
+              <DatePicker
+                selected={form.preferred_date ? new Date(`${form.preferred_date}T00:00:00`) : null}
+                onChange={(date) => handlePreferredDateChange(date ? formatDateInput(date) : '')}
+                minDate={minBookingDateObj}
+                maxDate={maxBookingDateObj}
+                filterDate={(date) => !isBlockedBookingDate(date)}
+                dateFormat="yyyy-MM-dd"
+                placeholderText="Select booking date"
+                className="input-field w-full"
+                wrapperClassName="w-full booking-datepicker-wrapper"
+                popperClassName="booking-datepicker-popper"
+                calendarClassName="booking-datepicker-calendar"
+                required
+                renderCustomHeader={({ date, changeYear, changeMonth }) => (
+                  <div className="flex items-center justify-between gap-2 px-2 pb-2 booking-datepicker-header">
+                    <select
+                      value={date.getFullYear()}
+                      onChange={({ target: { value } }) => changeYear(Number(value))}
+                      className="booking-datepicker-header-select"
+                    >
+                      {allowedYears.map((year) => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={date.getMonth()}
+                      onChange={({ target: { value } }) => changeMonth(Number(value))}
+                      className="booking-datepicker-header-select"
+                    >
+                      {MONTH_NAMES.map((month, index) => (
+                        <option key={month} value={index}>{month}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              />
               <p className="text-xs text-gray-500 mt-1">
-                {selectedProductType === 'vehicle'
-                  ? 'Vehicle bookings can be scheduled up to 1 month ahead.'
-                  : 'Tools, parts, and other item bookings can be scheduled up to 3 months ahead.'}
+                Bookings can be scheduled from this month to next month only.
+              </p>
+              <p className="text-xs text-amber-600 mt-1">
+                Sundays and holidays are unavailable. When this month changes, the booking window automatically rolls to the new current month and next month.
               </p>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Preferred Time *</label>
-              <input type="time" value={form.preferred_time} onChange={e => setForm({ ...form, preferred_time: e.target.value })} className="input-field" required />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">How will you receive the item?</label>
-              <select value={form.delivery_method} onChange={e => setForm({ ...form, delivery_method: e.target.value })} className="input-field">
-                <option value="pickup">Pickup at store</option>
-                <option value="delivery">Delivery</option>
+              <select
+                value={form.preferred_time}
+                onChange={e => setForm({ ...form, preferred_time: e.target.value })}
+                className="input-field"
+                required
+                disabled={!form.preferred_date || (isVehicleBooking && !form.product_id) || (isServiceAppointment && !form.service_type) || availabilityLoading}
+              >
+                <option value="">{availabilityLoading ? 'Loading available slots...' : 'Select time slot...'}</option>
+                {BOOKING_TIME_SLOTS.map(slot => {
+                  const isUnavailable = unavailableTimes.includes(slot);
+                  return (
+                    <option key={slot} value={slot} disabled={isUnavailable}>
+                      {toTwelveHourTime(slot)}{isUnavailable ? ' (Unavailable)' : ''}
+                    </option>
+                  );
+                })}
               </select>
+              <p className="text-xs text-gray-500 mt-1">
+                {(form.preferred_date && ((isVehicleBooking && form.product_id) || (isServiceAppointment && form.service_type)))
+                  ? `Available slots: ${availableTimes.length}/${BOOKING_TIME_SLOTS.length}`
+                  : `Select ${isVehicleBooking ? 'a vehicle' : 'a service'} and date to load available time slots (8:00 AM to 5:00 PM).`}
+              </p>
             </div>
           </div>
           
@@ -171,26 +366,6 @@ export default function Bookings() {
             <label className="block text-sm font-medium mb-1">Notes</label>
             <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className="input-field" rows={2} placeholder="Any additional details..." />
           </div>
-
-          {/* Reservation Fee Notice for vehicles */}
-          {feeInfo && feeInfo.fee > 0 && (
-            <div className="rounded-lg border border-accent-200 bg-accent-50 p-4">
-              <div className="flex items-start gap-3">
-                <FiStar className="text-accent-500 mt-0.5 flex-shrink-0" size={18} />
-                <div>
-                  <p className="font-semibold text-accent-800">Reservation Fee Required</p>
-                  <p className="text-sm text-accent-700 mt-1">
-                    This is a <strong>{feeInfo.is_popular ? 'popular' : 'standard'}</strong> vehicle.
-                    A reservation fee of <strong>{formatPrice(feeInfo.fee)}</strong> ({feeInfo.rate}% of vehicle price) is required to hold this vehicle.
-                  </p>
-                  <p className="text-xs text-accent-600 mt-1">
-                    The vehicle will be held for <strong>{feeInfo.days} {feeInfo.days === 1 ? 'day' : 'days'}</strong> from booking approval.
-                    Pay the fee after admin approves your booking.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
 
           <div className="bg-amber-50 rounded-lg p-3 text-sm text-amber-700">
             Note: There is a 2-hour buffer between bookings. Your booking requires admin approval.
@@ -302,89 +477,21 @@ export default function Bookings() {
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                   {booking.product_name && <div><span className="text-gray-500">Vehicle</span><p className="font-medium">{booking.product_name}</p></div>}
+                  {!booking.product_name && booking.service_type && <div><span className="text-gray-500">Service</span><p className="font-medium">{booking.service_type}</p></div>}
                   {isVehicle && booking.reservation_fee > 0 && (
                     <div><span className="text-gray-500">Reservation Fee</span><p className="font-medium text-accent-600">{formatPrice(booking.reservation_fee)}</p></div>
                   )}
-                  <div>
-                    <span className="text-gray-500">Date</span>
-                    <p className="font-medium flex items-center gap-1"><FiCalendar size={14} /> {new Date(booking.preferred_date).toLocaleDateString()}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Time</span>
-                    <p className="font-medium flex items-center gap-1"><FiClock size={14} /> {booking.preferred_time}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Method</span>
-                    <p className="font-medium capitalize flex items-center gap-1">
-                      {booking.delivery_method === 'delivery' ? <FiTruck size={14} /> : <FiMapPin size={14} />}
-                      {booking.delivery_method}
-                    </p>
-                  </div>
-                  {booking.notes && (
-                    <div className="md:col-span-4">
-                      <span className="text-gray-500">Notes</span>
-                      <p className="font-medium">{booking.notes}</p>
-                    </div>
-                  )}
-                  {isVehicle && booking.reservation_expires_at && !booking.reservation_fee_paid && ['pending', 'approved'].includes(booking.status) && (
-                    <div className="md:col-span-4">
-                      <ReservationCountdown expiresAt={booking.reservation_expires_at} />
-                    </div>
-                  )}
+                  <div><span className="text-gray-500">Date</span><p className="font-medium flex items-center gap-1"><FiCalendar size={12} /> {booking.preferred_date}</p></div>
+                  <div><span className="text-gray-500">Time</span><p className="font-medium flex items-center gap-1"><FiClock size={12} /> {toTwelveHourTime(booking.preferred_time)}</p></div>
                 </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {booking.status === 'pending' && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          await api.updateBookingStatus(booking.id, { status: 'cancelled' });
-                          toast.success('Booking cancelled');
-                          fetchBookings();
-                        } catch (err) {
-                          toast.error(err.message);
-                        }
-                      }}
-                      className="btn-secondary btn-sm flex items-center gap-1"
-                    >
-                      <FiXCircle size={14} /> Cancel Booking
-                    </button>
-                  )}
-
-                  {booking.status === 'approved' && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          await api.confirmPickup(booking.id);
-                          toast.success('Pickup confirmed');
-                          fetchBookings();
-                        } catch (err) {
-                          toast.error(err.message);
-                        }
-                      }}
-                      className="btn-secondary btn-sm flex items-center gap-1"
-                    >
-                      <FiCheckCircle size={14} /> Confirm Pickup
-                    </button>
-                  )}
-
-                  {booking.status === 'approved' && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          await api.markNoShow(booking.id);
-                          toast.success('Marked as no-show');
-                          fetchBookings();
-                        } catch (err) {
-                          toast.error(err.message);
-                        }
-                      }}
-                      className="btn-secondary btn-sm"
-                    >
-                      Mark No Show
-                    </button>
-                  )}
-                </div>
+                {booking.pickup_confirmed && <p className="text-sm text-green-600 mt-2 flex items-center gap-1"><FiCheckCircle size={14} /> Pickup confirmed</p>}
+                {booking.admin_notes && <p className="text-sm text-gray-500 mt-2">Admin: {booking.admin_notes}</p>}
+                {/* Countdown for vehicle reservations */}
+                {isVehicle && booking.reservation_expires_at && ['pending', 'approved'].includes(booking.status) && (
+                  <div className="mt-3">
+                    <ReservationCountdown expiresAt={booking.reservation_expires_at} />
+                  </div>
+                )}
               </div>
             );
           })}

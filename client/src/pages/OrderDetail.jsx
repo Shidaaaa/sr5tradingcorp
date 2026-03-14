@@ -23,14 +23,12 @@ const statusConfig = {
 
 export default function OrderDetail() {
   const { id } = useParams();
-  const { user } = useAuth();
   const navigate = useNavigate();
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showPayment, setShowPayment] = useState(false);
   const [showReturn, setShowReturn] = useState(false);
-  const [processingReservation, setProcessingReservation] = useState(false);
-  const [paymentForm, setPaymentForm] = useState({ amount: '', payment_method: 'cash', payment_type: 'full' });
+  const [paymentForm, setPaymentForm] = useState({ amount: '', payment_method: 'gcash', payment_type: 'full', reference_number: '' });
   const [returnForm, setReturnForm] = useState({ order_item_id: '', reason: '', request_type: 'return' });
 
   useEffect(() => { fetchOrder(); }, [id]);
@@ -39,7 +37,14 @@ export default function OrderDetail() {
     try {
       const data = await api.getOrder(id);
       setOrder(data);
-      setPaymentForm(prev => ({ ...prev, amount: data.remaining_balance > 0 ? data.remaining_balance : data.total_amount }));
+      setPaymentForm(prev => ({
+        ...prev,
+        amount: data.has_vehicle
+          ? (data.reservation_fee_paid ? data.pickup_balance_due || data.remaining_balance : data.reservation_fee_total)
+          : (data.remaining_balance > 0 ? data.remaining_balance : data.total_amount),
+        payment_method: data.has_vehicle ? (data.vehicle_payment_method === 'installment' ? 'installment' : (data.vehicle_payment_method || 'gcash')) : prev.payment_method,
+        payment_type: data.has_vehicle && !data.reservation_fee_paid ? 'reservation' : prev.payment_type,
+      }));
     } catch (err) {
       toast.error('Order not found');
       navigate('/orders');
@@ -51,15 +56,22 @@ export default function OrderDetail() {
   const handlePayment = async (e) => {
     e.preventDefault();
     try {
-      // For card payments, redirect to Stripe Checkout
-      if (paymentForm.payment_method === 'credit_card' || paymentForm.payment_method === 'debit_card') {
+      if (!order.has_vehicle && (paymentForm.payment_method === 'credit_card' || paymentForm.payment_method === 'debit_card')) {
         const session = await api.createStripeSession({ order_id: order.id });
         window.location.href = session.url;
         return;
       }
-      const data = await api.processPayment({ order_id: order.id, ...paymentForm, amount: Number(paymentForm.amount) });
+      const data = await api.processPayment({
+        order_id: order.id,
+        ...paymentForm,
+        amount: Number(paymentForm.amount),
+        installment_plan_name: order.installment_plan_name || null,
+        installment_interest_rate: order.installment_interest_rate || 0,
+        total_installments: order.installment_months || null,
+      });
       toast.success('Payment processed!');
       setShowPayment(false);
+      await fetchOrder();
       navigate(`/receipt/${data.receipt_number}`);
     } catch (err) { toast.error(err.message); }
   };
@@ -74,15 +86,15 @@ export default function OrderDetail() {
     } catch (err) { toast.error(err.message); }
   };
 
-  const handleReservationPayment = async () => {
-    try {
-      setProcessingReservation(true);
-      const session = await api.createStripeOrderReservationSession({ order_id: order.id });
-      window.location.href = session.url;
-    } catch (err) {
-      toast.error(err.message);
-      setProcessingReservation(false);
-    }
+  const openReservationPayment = () => {
+    setPaymentForm(prev => ({
+      ...prev,
+      amount: order.reservation_fee_total || 0,
+      payment_method: order.vehicle_payment_method === 'installment' ? 'installment' : (order.vehicle_payment_method || 'gcash'),
+      payment_type: 'reservation',
+      reference_number: '',
+    }));
+    setShowPayment(true);
   };
 
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500"></div></div>;
@@ -121,6 +133,17 @@ export default function OrderDetail() {
               Reservation fee: <strong>{formatPrice(order.reservation_fee_total || 0)}</strong> • 
               {order.reservation_fee_paid ? ' Paid' : ' Unpaid'}
             </p>
+            <p className="text-accent-700 mt-1">
+              Settlement method: <strong className="capitalize">{(order.vehicle_payment_method || 'N/A').replace('_', ' ')}</strong>
+            </p>
+            {order.vehicle_payment_method === 'installment' && (
+              <>
+                <p className="text-accent-700 mt-1">Plan: <strong>{order.installment_plan_name}</strong></p>
+                <p className="text-accent-700 mt-1">Required by pickup: <strong>{formatPrice(order.pickup_payment_required_total || 0)}</strong></p>
+                <p className="text-accent-700 mt-1">Pickup balance due after reservation fee: <strong>{formatPrice(order.pickup_balance_due || 0)}</strong></p>
+                <p className="text-accent-700 mt-1">Monthly installment: <strong>{formatPrice(order.monthly_installment_amount || 0)}</strong></p>
+              </>
+            )}
             {order.reservation_expires_at && (
               <p className="text-accent-700 mt-1">
                 Reservation expires: <strong>{new Date(order.reservation_expires_at).toLocaleString()}</strong>
@@ -168,11 +191,11 @@ export default function OrderDetail() {
         {/* Actions */}
         <div className="flex flex-wrap gap-3">
           {order.has_vehicle && !order.reservation_fee_paid && !['cancelled', 'returned'].includes(order.status) && (
-            <button onClick={handleReservationPayment} disabled={processingReservation} className="btn-primary btn-sm flex items-center gap-1">
-              <FiCreditCard size={14} /> {processingReservation ? 'Redirecting...' : `Pay Reservation Fee ${formatPrice(order.reservation_fee_total || 0)}`}
+            <button onClick={openReservationPayment} className="btn-primary btn-sm flex items-center gap-1">
+              <FiCreditCard size={14} /> {`Pay Reservation Fee ${formatPrice(order.reservation_fee_total || 0)}`}
             </button>
           )}
-          {order.remaining_balance > 0 && !['cancelled', 'returned'].includes(order.status) && (!order.has_vehicle || order.reservation_fee_paid) && (
+          {order.remaining_balance > 0 && !['cancelled', 'returned'].includes(order.status) && (!order.has_vehicle || (order.reservation_fee_paid && order.vehicle_payment_method !== 'installment')) && (
             <button onClick={() => setShowPayment(true)} className="btn-primary btn-sm flex items-center gap-1"><FiCreditCard size={14} /> Make Payment</button>
           )}
           {['completed', 'delivered', 'picked_up'].includes(order.status) && (
@@ -185,7 +208,7 @@ export default function OrderDetail() {
       {showPayment && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowPayment(false)}>
           <form onClick={e => e.stopPropagation()} onSubmit={handlePayment} className="bg-white rounded-xl p-6 w-full max-w-md mx-4 space-y-4">
-            <h3 className="text-lg font-bold">Make Payment</h3>
+            <h3 className="text-lg font-bold">{paymentForm.payment_type === 'reservation' ? 'Pay Reservation Fee' : 'Make Payment'}</h3>
             <div>
               <label className="block text-sm font-medium mb-1">Amount</label>
               <input type="number" step="0.01" value={paymentForm.amount} onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })} className="input-field" required />
@@ -193,20 +216,40 @@ export default function OrderDetail() {
             <div>
               <label className="block text-sm font-medium mb-1">Payment Method</label>
               <select value={paymentForm.payment_method} onChange={e => setPaymentForm({ ...paymentForm, payment_method: e.target.value })} className="input-field">
-                <option value="cash">Cash</option>
-                <option value="credit_card">Credit Card</option>
-                <option value="debit_card">Debit Card</option>
-                <option value="ewallet">E-Wallet</option>
-                <option value="bank_transfer">Bank Transfer</option>
+                {order.has_vehicle ? (
+                  <>
+                    <option value="gcash">GCash</option>
+                    <option value="bank_transfer">Bank Transfer</option>
+                    {order.vehicle_payment_method === 'installment' && <option value="installment">Installment</option>}
+                  </>
+                ) : (
+                  <>
+                    <option value="cash">Cash</option>
+                    <option value="credit_card">Credit Card</option>
+                    <option value="debit_card">Debit Card</option>
+                    <option value="ewallet">E-Wallet</option>
+                    <option value="bank_transfer">Bank Transfer</option>
+                  </>
+                )}
               </select>
             </div>
+            {order.has_vehicle && ['gcash', 'bank_transfer'].includes(paymentForm.payment_method) && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Reference Number</label>
+                <input value={paymentForm.reference_number} onChange={e => setPaymentForm({ ...paymentForm, reference_number: e.target.value })} className="input-field" required />
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium mb-1">Payment Type</label>
-              <select value={paymentForm.payment_type} onChange={e => setPaymentForm({ ...paymentForm, payment_type: e.target.value })} className="input-field">
-                <option value="full">Full Payment</option>
-                <option value="partial">Partial Payment</option>
-                <option value="installment">Installment</option>
-              </select>
+              {order.has_vehicle ? (
+                <input value={paymentForm.payment_type === 'reservation' ? 'Reservation Fee' : 'Vehicle Payment'} className="input-field bg-gray-50" readOnly />
+              ) : (
+                <select value={paymentForm.payment_type} onChange={e => setPaymentForm({ ...paymentForm, payment_type: e.target.value })} className="input-field">
+                  <option value="full">Full Payment</option>
+                  <option value="partial">Partial Payment</option>
+                  <option value="installment">Installment</option>
+                </select>
+              )}
             </div>
             <div className="flex gap-3">
               <button type="button" onClick={() => setShowPayment(false)} className="btn-secondary flex-1">Cancel</button>

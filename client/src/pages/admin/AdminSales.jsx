@@ -54,6 +54,7 @@ export default function AdminSales() {
               <thead><tr className="bg-gray-50 text-left">
                 <th className="px-4 py-3">Order #</th>
                 <th className="px-4 py-3">Date</th>
+                <th className="px-4 py-3">Completed</th>
                 <th className="px-4 py-3">Customer</th>
                 <th className="px-4 py-3">Items</th>
                 <th className="px-4 py-3">Total</th>
@@ -68,6 +69,7 @@ export default function AdminSales() {
                   <tr key={s.id} className="border-t border-gray-100 hover:bg-gray-50">
                     <td className="px-4 py-3 font-mono text-xs">{s.order_number}</td>
                     <td className="px-4 py-3 text-gray-500">{new Date(s.created_at).toLocaleDateString()}</td>
+                    <td className="px-4 py-3 text-gray-500">{s.completed_at ? new Date(s.completed_at).toLocaleDateString() : '-'}</td>
                     <td className="px-4 py-3">{s.first_name} {s.last_name}</td>
                     <td className="px-4 py-3">{s.item_count} item(s)</td>
                     <td className="px-4 py-3 font-medium">{formatPrice(s.total_amount)}</td>
@@ -78,7 +80,7 @@ export default function AdminSales() {
                     <td className="px-4 py-3"><button onClick={() => setSelectedOrder(s)} className="btn-secondary btn-sm"><FiEye size={14} /></button></td>
                   </tr>
                 ))}
-                {sales.length === 0 && <tr><td colSpan="10" className="px-4 py-10 text-center text-gray-400">No sales records found.</td></tr>}
+                {sales.length === 0 && <tr><td colSpan="11" className="px-4 py-10 text-center text-gray-400">No sales records found.</td></tr>}
               </tbody>
             </table>
           </div>

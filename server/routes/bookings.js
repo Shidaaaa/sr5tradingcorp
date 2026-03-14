@@ -2,28 +2,94 @@ const express = require('express');
 const Booking = require('../models/Booking');
 const Product = require('../models/Product');
 const { authenticateToken } = require('../middleware/auth');
-const { generateBookingNumber, addBufferTime, calculateReservationFee, getVehicleReservationExpiry } = require('../utils/helpers');
+const { generateBookingNumber, addBufferTime } = require('../utils/helpers');
 
 const router = express.Router();
 
-function getBookingLeadLimitDate(productType) {
-  const limit = new Date();
-  limit.setHours(23, 59, 59, 999);
-  limit.setDate(limit.getDate() + (productType === 'vehicle' ? 30 : 90));
-  return limit;
+const HOLIDAY_MM_DD = new Set([
+  '01-01',
+  '04-09',
+  '05-01',
+  '06-12',
+  '08-21',
+  '11-01',
+  '11-30',
+  '12-08',
+  '12-25',
+  '12-30',
+  '12-31',
+]);
+
+function isHolidayDate(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return HOLIDAY_MM_DD.has(`${month}-${day}`);
 }
+
+function getRollingMaxBookingDate() {
+  const now = new Date();
+  // Last day of next month; e.g. March -> April 30, December -> January 31 (next year)
+  return new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59, 999);
+}
+
+function buildTimeSlots(start = '08:00', end = '17:00', intervalMinutes = 60) {
+  const [startH, startM] = start.split(':').map(Number);
+  const [endH, endM] = end.split(':').map(Number);
+  const startTotal = (startH * 60) + startM;
+  const endTotal = (endH * 60) + endM;
+
+  const slots = [];
+  for (let t = startTotal; t <= endTotal; t += intervalMinutes) {
+    const h = String(Math.floor(t / 60)).padStart(2, '0');
+    const m = String(t % 60).padStart(2, '0');
+    slots.push(`${h}:${m}`);
+  }
+  return slots;
+}
+
+const BOOKING_TIME_SLOTS = buildTimeSlots('08:00', '17:00', 15);
 
 // Get reservation fee for a vehicle product (MUST be before /:id routes)
 router.get('/reservation-fee/:productId', authenticateToken, async (req, res) => {
   try {
     const product = await Product.findById(req.params.productId).lean();
     if (!product) return res.status(404).json({ error: 'Product not found.' });
-    if (product.type !== 'vehicle') return res.json({ fee: 0, is_popular: false, days: 0, rate: 0 });
 
-    const fee = calculateReservationFee(product);
-    const days = product.is_popular ? 14 : 7;
-    const rate = product.is_popular ? 5 : 2;
-    res.json({ fee, is_popular: product.is_popular, days, rate, product_name: product.name, product_price: product.price });
+    // Reservation fees are disabled; booking time slot itself secures the appointment.
+    res.json({
+      fee: 0,
+      is_popular: !!product.is_popular,
+      days: 0,
+      rate: 0,
+      product_name: product.name,
+      product_price: product.price,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// Get unavailable / available time slots for a product and date
+router.get('/availability/:productId', authenticateToken, async (req, res) => {
+  try {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: 'Date query parameter is required.' });
+
+    const bookings = await Booking.find({
+      preferred_date: date,
+      status: { $in: ['pending', 'approved'] },
+    }).select('preferred_time').lean();
+
+    const unavailable_times = Array.from(new Set(bookings.map(b => b.preferred_time))).sort();
+    const available_times = BOOKING_TIME_SLOTS.filter(time => !unavailable_times.includes(time));
+
+    res.json({
+      date,
+      product_id: req.params.productId,
+      unavailable_times,
+      available_times,
+      all_slots: BOOKING_TIME_SLOTS,
+    });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
   }
@@ -32,30 +98,41 @@ router.get('/reservation-fee/:productId', authenticateToken, async (req, res) =>
 // Get user bookings
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    // Auto-expire overdue vehicle reservations
     await Booking.updateMany(
-      { reservation_expires_at: { $lt: new Date() }, status: { $in: ['pending', 'approved'] }, reservation_fee: { $gt: 0 } },
+      {
+        reservation_expires_at: { $lt: new Date() },
+        status: { $in: ['pending', 'approved'] },
+        reservation_fee: { $gt: 0 },
+      },
       { status: 'cancelled' }
     );
-    // Release products from expired reservations
-    const expired = await Booking.find({ status: 'cancelled', reservation_expires_at: { $lt: new Date() } }).lean();
-    for (const b of expired) {
-      if (b.product_id) await Product.findByIdAndUpdate(b.product_id, { status: 'available' });
+
+    const expired = await Booking.find({
+      status: 'cancelled',
+      reservation_expires_at: { $lt: new Date() },
+    }).lean();
+
+    for (const booking of expired) {
+      if (booking.product_id) await Product.findByIdAndUpdate(booking.product_id, { status: 'available' });
     }
 
     const bookings = await Booking.find({ user_id: req.user.id })
       .populate('product_id', 'name image_url type price is_popular')
       .sort({ created_at: -1 })
       .lean();
-    res.json(bookings.map(b => ({
-      ...b,
-      id: b._id,
-      product_name: b.product_id?.name,
-      product_image: b.product_id?.image_url,
-      product_type: b.product_id?.type,
-      product_price: b.product_id?.price,
-      product_is_popular: b.product_id?.is_popular,
-      product_id: b.product_id?._id,
+
+    res.json(bookings.map(booking => ({
+      ...booking,
+      id: booking._id,
+      product_name: booking.product_id?.name,
+      product_image: booking.product_id?.image_url,
+      product_type: booking.product_id?.type,
+      product_price: booking.product_id?.price,
+      product_is_popular: booking.product_id?.is_popular,
+      product_id: booking.product_id?._id,
+      reservation_fee: 0,
+      reservation_fee_paid: true,
+      reservation_expires_at: null,
     })));
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
@@ -68,7 +145,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const booking = await Booking.findOne({ _id: req.params.id, user_id: req.user.id })
       .populate('product_id', 'name image_url type price is_popular')
       .lean();
+
     if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+
     res.json({
       ...booking,
       id: booking._id,
@@ -78,6 +157,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
       product_price: booking.product_id?.price,
       product_is_popular: booking.product_id?.is_popular,
       product_id: booking.product_id?._id,
+      reservation_fee: 0,
+      reservation_fee_paid: true,
+      reservation_expires_at: null,
     });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
@@ -87,14 +169,27 @@ router.get('/:id', authenticateToken, async (req, res) => {
 // Create booking
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const { product_id, booking_type, preferred_date, preferred_time, end_time, delivery_method, notes } = req.body;
-    if (!product_id || !booking_type || !preferred_date || !preferred_time) {
-      return res.status(400).json({ error: 'Product, booking type, date and time are required.' });
+    const { product_id, service_type, booking_type, preferred_date, preferred_time, end_time, notes } = req.body;
+    if (!booking_type || !preferred_date || !preferred_time) {
+      return res.status(400).json({ error: 'Booking type, date and time are required.' });
     }
 
-    const product = await Product.findById(product_id);
-    if (!product) return res.status(404).json({ error: 'Product not found.' });
-    if (product.status !== 'available') return res.status(400).json({ error: 'Product is not available for booking.' });
+    const requiresVehicle = booking_type === 'test_drive' || booking_type === 'vehicle_viewing';
+    const isServiceAppointment = booking_type === 'service_appointment';
+
+    let product = null;
+    if (requiresVehicle) {
+      if (!product_id) return res.status(400).json({ error: 'Please select a vehicle for this booking type.' });
+
+      product = await Product.findById(product_id);
+      if (!product) return res.status(404).json({ error: 'Product not found.' });
+      if (product.type !== 'vehicle') return res.status(400).json({ error: 'Only vehicles can be booked for test drives or vehicle viewing.' });
+      if (product.status !== 'available') return res.status(400).json({ error: 'Product is not available for booking.' });
+    }
+
+    if (isServiceAppointment && !service_type) {
+      return res.status(400).json({ error: 'Please select a service type for service appointments.' });
+    }
 
     const requestedDate = new Date(`${preferred_date}T00:00:00`);
     if (Number.isNaN(requestedDate.getTime())) {
@@ -107,38 +202,43 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Preferred date cannot be in the past.' });
     }
 
-    const maxBookingDate = getBookingLeadLimitDate(product.type);
+    const maxBookingDate = getRollingMaxBookingDate();
     if (requestedDate > maxBookingDate) {
       return res.status(400).json({
-        error: product.type === 'vehicle'
-          ? 'Vehicle bookings can only be scheduled up to 1 month in advance.'
-          : 'Tools, parts, and other item bookings can only be scheduled up to 3 months in advance.'
+        error: 'Bookings can only be scheduled from the current month up to the next month.',
       });
     }
 
-    const effectiveEnd = end_time || addBufferTime(preferred_time);
-
-    // Simplified conflict check
-    const simpleConflict = await Booking.findOne({
-      product_id,
-      preferred_date,
-      status: { $in: ['pending', 'approved'] },
-    });
-    if (simpleConflict && booking_type === 'test_drive') {
-      const existEnd = simpleConflict.end_time || addBufferTime(simpleConflict.preferred_time);
-      if (preferred_time < existEnd && effectiveEnd > simpleConflict.preferred_time) {
-        return res.status(409).json({ error: 'Time slot conflicts with an existing booking.' });
-      }
+    if (requestedDate.getDay() === 0) {
+      return res.status(400).json({ error: 'Bookings are not available on Sundays.' });
     }
 
-    // Calculate reservation fee for vehicles
-    const isVehicle = product.type === 'vehicle';
-    const reservationFee = isVehicle ? calculateReservationFee(product) : 0;
-    const reservationExpiry = isVehicle ? getVehicleReservationExpiry(product.is_popular) : null;
+    if (isHolidayDate(requestedDate)) {
+      return res.status(400).json({ error: 'Bookings are not available on holidays.' });
+    }
+
+    if (!BOOKING_TIME_SLOTS.includes(preferred_time)) {
+      return res.status(400).json({ error: 'Selected time is not an available booking slot.' });
+    }
+
+    const alreadyBooked = await Booking.findOne({
+      preferred_date,
+      preferred_time,
+      status: { $in: ['pending', 'approved'] },
+    }).lean();
+
+    if (alreadyBooked) {
+      return res.status(409).json({ error: 'This time slot is already booked. Please choose another time.' });
+    }
+
+    const effectiveEnd = end_time || addBufferTime(preferred_time);
+    const reservationFee = 0;
+    const reservationExpiry = null;
 
     const booking = await Booking.create({
       user_id: req.user.id,
-      product_id,
+      product_id: product ? product._id : null,
+      service_type: isServiceAppointment ? service_type : null,
       booking_number: generateBookingNumber(),
       booking_type,
       preferred_date,
@@ -148,15 +248,8 @@ router.post('/', authenticateToken, async (req, res) => {
       reservation_fee: reservationFee,
       reservation_fee_paid: false,
       reservation_expires_at: reservationExpiry,
-      delivery_method: delivery_method || 'pickup',
       notes: notes || null,
     });
-
-    // Mark vehicle as reserved immediately
-    if (isVehicle) {
-      product.status = 'reserved';
-      await product.save();
-    }
 
     res.status(201).json({ ...booking.toObject(), id: booking._id, reservation_fee: reservationFee });
   } catch (err) {
@@ -174,7 +267,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
     if (status === 'cancelled') {
       booking.status = 'cancelled';
       await booking.save();
-      // Release the vehicle
       if (booking.product_id) {
         await Product.findByIdAndUpdate(booking.product_id, { status: 'available' });
       }

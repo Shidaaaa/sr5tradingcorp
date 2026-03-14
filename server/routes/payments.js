@@ -45,7 +45,7 @@ function getStripeImageUrl(rawUrl) {
 // Process payment
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const { order_id, booking_id, amount, payment_method, payment_type, reference_number, installment_number, total_installments, notes } = req.body;
+    const { order_id, booking_id, amount, payment_method, payment_type, reference_number, installment_number, total_installments, installment_plan_name, installment_interest_rate, notes } = req.body;
 
     if (!amount || !payment_method) return res.status(400).json({ error: 'Amount and payment method required.' });
     if (!order_id && !booking_id) return res.status(400).json({ error: 'Order or booking ID required.' });
@@ -53,6 +53,9 @@ router.post('/', authenticateToken, async (req, res) => {
     if (order_id) {
       const order = await Order.findOne({ _id: order_id, user_id: req.user.id });
       if (!order) return res.status(404).json({ error: 'Order not found.' });
+      if (order.has_vehicle && !['gcash', 'bank_transfer', 'installment'].includes(payment_method)) {
+        return res.status(400).json({ error: 'Vehicle orders only support installment, GCash, or bank transfer.' });
+      }
     }
     if (booking_id) {
       const booking = await Booking.findOne({ _id: booking_id, user_id: req.user.id });
@@ -71,6 +74,8 @@ router.post('/', authenticateToken, async (req, res) => {
       receipt_number: generateReceiptNumber(),
       installment_number: installment_number || null,
       total_installments: total_installments || null,
+      installment_plan_name: installment_plan_name || null,
+      installment_interest_rate: installment_interest_rate || 0,
       notes: notes || null,
     });
 

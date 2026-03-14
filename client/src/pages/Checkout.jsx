@@ -7,6 +7,13 @@ import toast from 'react-hot-toast';
 import { FiCreditCard, FiTruck, FiMapPin, FiCheck } from 'react-icons/fi';
 
 const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price);
+const INSTALLMENT_PLAN = {
+  id: 'vehicle_50_12_1',
+  label: '50% downpayment • 12 months • 1% interest',
+  downpaymentRate: 0.5,
+  months: 12,
+  interestRate: 0.01,
+};
 
 const calculateVehicleReservationFee = (item) => {
   if (!item || item.type !== 'vehicle') return 0;
@@ -25,46 +32,60 @@ export default function Checkout() {
   const [form, setForm] = useState({
     delivery_method: 'pickup',
     delivery_address: user?.address || '',
-    payment_method: 'credit_card',
+    payment_method: 'cash',
+    reference_number: '',
+    installment_plan: INSTALLMENT_PLAN.id,
     notes: '',
   });
 
   const vehicleItems = cart.items.filter(item => item.type === 'vehicle');
   const hasVehicleOrder = vehicleItems.length > 0;
   const reservationFeeTotal = vehicleItems.reduce((sum, item) => sum + (calculateVehicleReservationFee(item) * (item.quantity || 1)), 0);
+  const estimatedPickupRequired = hasVehicleOrder
+    ? (form.payment_method === 'installment' ? (cart.total * INSTALLMENT_PLAN.downpaymentRate) : cart.total)
+    : cart.total;
+  const estimatedPickupBalance = Math.max(0, estimatedPickupRequired - reservationFeeTotal);
+  const estimatedMonthlyInstallment = form.payment_method === 'installment'
+    ? (((cart.total - (cart.total * INSTALLMENT_PLAN.downpaymentRate)) * (1 + (INSTALLMENT_PLAN.interestRate * INSTALLMENT_PLAN.months))) / INSTALLMENT_PLAN.months)
+    : 0;
 
   useEffect(() => {
-    if (hasVehicleOrder && !['credit_card', 'debit_card'].includes(form.payment_method)) {
-      setForm(prev => ({ ...prev, payment_method: 'credit_card' }));
+    if (hasVehicleOrder && !['gcash', 'bank_transfer', 'installment'].includes(form.payment_method)) {
+      setForm(prev => ({ ...prev, payment_method: 'gcash' }));
     }
   }, [hasVehicleOrder]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (cart.items.length === 0) { toast.error('Cart is empty'); return; }
-    if (!Number.isFinite(cart.total) || cart.total <= 0) {
-      toast.error('Order total must be greater than zero. Please review your cart items.');
-      return;
-    }
-
-    let orderId = null;
     setLoading(true);
     try {
       const data = await api.placeOrder(form);
-      orderId = data.id || data._id;
-      await fetchCart();
+      const orderId = data.id || data._id;
 
-      // Vehicle orders require reservation fee payment online.
       if (data.has_vehicle && data.reservation_fee_total > 0) {
-        toast('Redirecting to secure payment...');
-        const session = await api.createStripeOrderReservationSession({ order_id: orderId });
-        window.location.href = session.url;
+        const payment = await api.processPayment({
+          order_id: orderId,
+          amount: data.reservation_fee_total,
+          payment_method: form.payment_method,
+          payment_type: 'reservation',
+          reference_number: form.reference_number || null,
+          installment_plan_name: data.installment_plan_name || INSTALLMENT_PLAN.label,
+          installment_interest_rate: data.installment_interest_rate || INSTALLMENT_PLAN.interestRate,
+          total_installments: data.installment_months || INSTALLMENT_PLAN.months,
+          notes: 'Vehicle reservation fee paid during checkout',
+        });
+        await fetchCart();
+        toast.success(`Reservation fee paid: ${formatPrice(data.reservation_fee_total)}. This amount will be deducted from your vehicle total.`);
+        navigate(`/orders/${orderId}`);
         return;
       }
 
+      await fetchCart();
+
       // For card payments, redirect to Stripe Checkout
       if (form.payment_method === 'credit_card' || form.payment_method === 'debit_card') {
-        toast('Redirecting to secure payment...');
+        toast.success('Order created! Redirecting to payment...');
         const session = await api.createStripeSession({ order_id: orderId });
         window.location.href = session.url;
         return;
@@ -73,11 +94,6 @@ export default function Checkout() {
       toast.success('Order placed successfully!');
       navigate(`/orders/${orderId}`);
     } catch (err) {
-      if (orderId && (form.payment_method === 'credit_card' || form.payment_method === 'debit_card')) {
-        toast.error(`${err.message} You can retry payment from your order details.`);
-        navigate(`/orders/${orderId}`);
-        return;
-      }
       toast.error(err.message);
     } finally {
       setLoading(false);
@@ -121,7 +137,7 @@ export default function Checkout() {
               <div className="rounded-lg border border-accent-200 bg-accent-50 p-4 mb-4">
                 <p className="font-semibold text-accent-800">Vehicle Reservation Fee Required</p>
                 <p className="text-sm text-accent-700 mt-1">
-                  Reservation fee total: <strong>{formatPrice(reservationFeeTotal)}</strong>. This must be paid online to secure your vehicle order.
+                  Reservation fee total: <strong>{formatPrice(reservationFeeTotal)}</strong>. This is the only amount paid during checkout and it will be deducted from the full vehicle price.
                 </p>
                 <p className="text-xs text-accent-600 mt-1">
                   Vehicle reservation period: <strong>1 week</strong>. Parts/accessories reservation period: <strong>48 hours</strong>.
@@ -132,8 +148,9 @@ export default function Checkout() {
             <div className="grid grid-cols-2 gap-3">
               {(hasVehicleOrder
                 ? [
-                    { value: 'credit_card', label: 'Credit Card', desc: 'Visa, Mastercard (online)' },
-                    { value: 'debit_card', label: 'Debit Card', desc: 'Bank debit cards (online)' },
+                    { value: 'gcash', label: 'GCash', desc: 'Pay reservation fee via GCash' },
+                    { value: 'bank_transfer', label: 'Bank Transfer', desc: 'Pay reservation fee via bank transfer' },
+                    { value: 'installment', label: 'Installment', desc: '50% downpayment, 12 months, 1% interest' },
                   ]
                 : [
                     { value: 'cash', label: 'Cash', desc: 'Pay on pickup' },
@@ -150,6 +167,25 @@ export default function Checkout() {
                 </label>
               ))}
             </div>
+
+            {hasVehicleOrder && ['gcash', 'bank_transfer'].includes(form.payment_method) && (
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reference Number</label>
+                <input value={form.reference_number} onChange={e => setForm({ ...form, reference_number: e.target.value })} className="input-field" placeholder="Transaction reference / receipt number" required />
+              </div>
+            )}
+
+            {hasVehicleOrder && form.payment_method === 'installment' && (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm space-y-2">
+                <p className="font-semibold text-amber-800">Installment Plan</p>
+                <select value={form.installment_plan} onChange={e => setForm({ ...form, installment_plan: e.target.value })} className="input-field">
+                  <option value={INSTALLMENT_PLAN.id}>{INSTALLMENT_PLAN.label}</option>
+                </select>
+                <p className="text-amber-700">Required by pickup: <strong>{formatPrice(estimatedPickupRequired)}</strong></p>
+                <p className="text-amber-700">Remaining to pay at pickup after reservation fee: <strong>{formatPrice(estimatedPickupBalance)}</strong></p>
+                <p className="text-amber-700">Estimated monthly installment after pickup: <strong>{formatPrice(estimatedMonthlyInstallment)}</strong></p>
+              </div>
+            )}
           </div>
 
           {/* Notes */}
@@ -176,11 +212,23 @@ export default function Checkout() {
               <span>Total</span>
               <span className="text-accent-600">{formatPrice(cart.total)}</span>
             </div>
-            <button type="submit" disabled={loading || cart.items.length === 0 || !Number.isFinite(cart.total) || cart.total <= 0} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
+            {hasVehicleOrder && (
+              <div className="mt-3 space-y-2 text-sm border-t pt-3">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Reservation Fee Due Now</span>
+                  <span className="font-semibold text-accent-700">{formatPrice(reservationFeeTotal)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Remaining Vehicle Price After Reservation</span>
+                  <span className="font-semibold">{formatPrice(Math.max(0, cart.total - reservationFeeTotal))}</span>
+                </div>
+              </div>
+            )}
+            <button type="submit" disabled={loading || cart.items.length === 0} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
               {loading
                 ? 'Processing...'
                 : hasVehicleOrder
-                  ? <><FiCreditCard /> Pay Reservation Fee Online</>
+                  ? <><FiCreditCard /> Pay Reservation Fee</>
                   : (form.payment_method === 'credit_card' || form.payment_method === 'debit_card')
                     ? <><FiCreditCard /> Pay with Card</>
                     : <><FiCheck /> Place Order</>

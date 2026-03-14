@@ -16,6 +16,28 @@ const PAGE_TITLES = {
   'other-units': 'Other Units',
 };
 
+const FALLBACK_IMAGES = {
+  truck: 'https://images.unsplash.com/photo-1580674285054-bed31e145f59?auto=format&fit=crop&w=1200&q=80',
+  tractor: 'https://images.unsplash.com/photo-1592982537447-7440770cbfc9?auto=format&fit=crop&w=1200&q=80',
+  van: 'https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=1200&q=80',
+  vehicle: 'https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&w=1200&q=80',
+  parts: 'https://images.unsplash.com/photo-1635764706136-18f6be2d0f5b?auto=format&fit=crop&w=1200&q=80',
+  tools: 'https://images.unsplash.com/photo-1581147036324-c47a03a81d48?auto=format&fit=crop&w=1200&q=80',
+};
+
+const pickFallbackImage = (product) => {
+  const name = (product?.name || '').toLowerCase();
+  const vehicleCategory = (product?.vehicle_category || '').toLowerCase();
+  const type = (product?.type || '').toLowerCase();
+
+  if (vehicleCategory.includes('truck') || name.includes('truck')) return FALLBACK_IMAGES.truck;
+  if (vehicleCategory.includes('tractor') || name.includes('tractor')) return FALLBACK_IMAGES.tractor;
+  if (vehicleCategory.includes('van') || name.includes('van')) return FALLBACK_IMAGES.van;
+  if (type === 'vehicle') return FALLBACK_IMAGES.vehicle;
+  if (type === 'tools') return FALLBACK_IMAGES.tools;
+  return FALLBACK_IMAGES.parts;
+};
+
 export default function Products({ filterType, browseCategory }) {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -75,6 +97,12 @@ export default function Products({ filterType, browseCategory }) {
   };
 
   const sortLabels = { '': 'Most Relevant', price_asc: 'Price: Low to High', price_desc: 'Price: High to Low', name: 'Name A-Z' };
+
+  const resolveImageSrc = (imageUrl) => {
+    if (!imageUrl) return '';
+    if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+    return imageUrl;
+  };
 
   return (
     <div>
@@ -137,7 +165,6 @@ export default function Products({ filterType, browseCategory }) {
                 <option value="vehicle">Vehicles</option>
                 <option value="parts">Parts</option>
                 <option value="tools">Tools</option>
-                <option value="general">General</option>
               </select>
             )}
             <select value={filters.category} onChange={e => setFilters({ ...filters, category: e.target.value })} className="input-field w-auto py-2 text-sm">
@@ -166,12 +193,12 @@ export default function Products({ filterType, browseCategory }) {
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-lg hover:-translate-y-1 transition-all duration-300">
                   {/* Image area */}
                   <div className="aspect-[4/3] bg-gradient-to-br from-gray-100 to-gray-200 relative overflow-hidden">
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="text-center text-gray-400">
-                        <FiTag size={40} className="mx-auto mb-1" />
-                        <span className="text-xs">No image</span>
-                      </div>
-                    </div>
+                    <img
+                      src={product.image_url ? resolveImageSrc(product.image_url) : pickFallbackImage(product)}
+                      alt={product.name}
+                      className="absolute inset-0 w-full h-full object-cover"
+                      loading="lazy"
+                    />
                     {/* Status overlay */}
                     {product.status === 'sold_out' && (
                       <div className="absolute inset-0 bg-black/40 flex items-center justify-center">

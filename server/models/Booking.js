@@ -5,6 +5,7 @@ const bookingSchema = new mongoose.Schema({
   booking_number: { type: String, unique: true, required: true },
   booking_type: { type: String, enum: ['test_drive', 'vehicle_viewing', 'service_appointment'], required: true },
   product_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', default: null },
+  service_type: { type: String, default: null },
   preferred_date: { type: String, required: true },
   preferred_time: { type: String, required: true },
   end_time: { type: String, default: null },
