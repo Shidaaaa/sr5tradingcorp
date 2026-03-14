@@ -305,4 +305,91 @@ export default function Bookings() {
                   {isVehicle && booking.reservation_fee > 0 && (
                     <div><span className="text-gray-500">Reservation Fee</span><p className="font-medium text-accent-600">{formatPrice(booking.reservation_fee)}</p></div>
                   )}
-                  <div><span className="text-gray-500">Date</span><p className="font-medium flex it
+                  <div>
+                    <span className="text-gray-500">Date</span>
+                    <p className="font-medium flex items-center gap-1"><FiCalendar size={14} /> {new Date(booking.preferred_date).toLocaleDateString()}</p>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Time</span>
+                    <p className="font-medium flex items-center gap-1"><FiClock size={14} /> {booking.preferred_time}</p>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Method</span>
+                    <p className="font-medium capitalize flex items-center gap-1">
+                      {booking.delivery_method === 'delivery' ? <FiTruck size={14} /> : <FiMapPin size={14} />}
+                      {booking.delivery_method}
+                    </p>
+                  </div>
+                  {booking.notes && (
+                    <div className="md:col-span-4">
+                      <span className="text-gray-500">Notes</span>
+                      <p className="font-medium">{booking.notes}</p>
+                    </div>
+                  )}
+                  {isVehicle && booking.reservation_expires_at && !booking.reservation_fee_paid && ['pending', 'approved'].includes(booking.status) && (
+                    <div className="md:col-span-4">
+                      <ReservationCountdown expiresAt={booking.reservation_expires_at} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {booking.status === 'pending' && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.updateBookingStatus(booking.id, { status: 'cancelled' });
+                          toast.success('Booking cancelled');
+                          fetchBookings();
+                        } catch (err) {
+                          toast.error(err.message);
+                        }
+                      }}
+                      className="btn-secondary btn-sm flex items-center gap-1"
+                    >
+                      <FiXCircle size={14} /> Cancel Booking
+                    </button>
+                  )}
+
+                  {booking.status === 'approved' && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.confirmPickup(booking.id);
+                          toast.success('Pickup confirmed');
+                          fetchBookings();
+                        } catch (err) {
+                          toast.error(err.message);
+                        }
+                      }}
+                      className="btn-secondary btn-sm flex items-center gap-1"
+                    >
+                      <FiCheckCircle size={14} /> Confirm Pickup
+                    </button>
+                  )}
+
+                  {booking.status === 'approved' && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.markNoShow(booking.id);
+                          toast.success('Marked as no-show');
+                          fetchBookings();
+                        } catch (err) {
+                          toast.error(err.message);
+                        }
+                      }}
+                      className="btn-secondary btn-sm"
+                    >
+                      Mark No Show
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
