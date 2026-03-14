@@ -18,7 +18,12 @@ export default function Register() {
     if (form.password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
     setLoading(true);
     try {
-      await register(form);
+      const data = await register(form);
+      if (data.needs_verification) {
+        toast.success('Account created. Enter the verification code sent to your email.');
+        navigate(`/verify-email?email=${encodeURIComponent(data.email || form.email)}`);
+        return;
+      }
       toast.success('Account created successfully!');
       navigate('/');
     } catch (err) {

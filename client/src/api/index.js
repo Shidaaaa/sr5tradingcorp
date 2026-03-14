@@ -15,7 +15,9 @@ async function apiRequest(endpoint, options = {}) {
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(data.error || 'Something went wrong');
+    const error = new Error(data.error || 'Something went wrong');
+    Object.assign(error, data);
+    throw error;
   }
 
   return data;
@@ -25,6 +27,8 @@ export const api = {
   // Auth
   login: (data) => apiRequest('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
   register: (data) => apiRequest('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
+  verifyEmailCode: (data) => apiRequest('/auth/verify-email', { method: 'POST', body: JSON.stringify(data) }),
+  resendVerificationCode: (data) => apiRequest('/auth/resend-verification', { method: 'POST', body: JSON.stringify(data) }),
   getProfile: () => apiRequest('/auth/profile'),
   updateProfile: (data) => apiRequest('/auth/profile', { method: 'PUT', body: JSON.stringify(data) }),
   changePassword: (data) => apiRequest('/auth/change-password', { method: 'PUT', body: JSON.stringify(data) }),

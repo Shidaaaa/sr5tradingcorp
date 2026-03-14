@@ -20,6 +20,11 @@ export default function Login() {
       toast.success('Welcome back!');
       navigate(data.user.role === 'admin' ? '/admin' : '/');
     } catch (err) {
+      if (err.needs_verification) {
+        toast.error('Please verify your email before signing in.');
+        navigate(`/verify-email?email=${encodeURIComponent(err.email || email)}`);
+        return;
+      }
       toast.error(err.message);
     } finally {
       setLoading(false);

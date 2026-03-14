@@ -26,13 +26,13 @@ async function seed() {
     const admin = await User.create({
       email: 'admin@sr5trading.com', password: adminPass,
       first_name: 'Admin', last_name: 'User', phone: '09171234567',
-      address: '123 Admin St', city: 'Manila', role: 'admin',
+      address: '123 Admin St', city: 'Manila', role: 'admin', email_verified: true,
     });
 
     const customer = await User.create({
       email: 'customer@test.com', password: customerPass,
       first_name: 'Juan', last_name: 'Dela Cruz', phone: '09181234567',
-      address: '456 Customer Ave', city: 'Quezon City', role: 'customer',
+      address: '456 Customer Ave', city: 'Quezon City', role: 'customer', email_verified: true,
     });
 
     console.log('Users created');

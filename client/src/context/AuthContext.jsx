@@ -30,8 +30,24 @@ export function AuthProvider({ children }) {
 
   const register = async (formData) => {
     const data = await api.register(formData);
-    localStorage.setItem('sr5_token', data.token);
-    setUser(data.user);
+    if (data.token && data.user) {
+      localStorage.setItem('sr5_token', data.token);
+      setUser(data.user);
+    }
+    return data;
+  };
+
+  const verifyEmail = async (email, code) => {
+    const data = await api.verifyEmailCode({ email, code });
+    if (data.token && data.user) {
+      localStorage.setItem('sr5_token', data.token);
+      setUser(data.user);
+    }
+    return data;
+  };
+
+  const resendVerificationCode = async (email) => {
+    const data = await api.resendVerificationCode({ email });
     return data;
   };
 
@@ -45,7 +61,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, updateUser }}>
+    <AuthContext.Provider value={{ user, loading, login, register, verifyEmail, resendVerificationCode, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   );
