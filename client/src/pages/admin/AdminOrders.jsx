@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../api';
 import toast from 'react-hot-toast';
-import { FiEye, FiCheck, FiTruck, FiX, FiSearch, FiCreditCard, FiUsers } from 'react-icons/fi';
+import { FiEye, FiSearch, FiCreditCard, FiUsers } from 'react-icons/fi';
 import Pagination from '../../components/Pagination';
 import SortHeader from '../../components/SortHeader';
 
@@ -22,7 +22,7 @@ const statusConfig = {
   replaced: { color: 'badge-purple', label: 'Replaced' },
 };
 
-const statusFlow = ['pending', 'confirmed', 'processing', 'ready', 'picked_up', 'delivered', 'completed', 'cancelled'];
+const statusFlow = ['picked_up', 'delivered'];
 
 export default function AdminOrders() {
   const [orders, setOrders] = useState([]);
@@ -219,8 +219,6 @@ export default function AdminOrders() {
                     <td className="px-4 py-3">
                       <div className="flex gap-1">
                         <button onClick={() => setSelected(selected?.id === order.id ? null : order)} className="p-1.5 hover:bg-gray-100 rounded" title="Details"><FiEye size={14} /></button>
-                        {order.status === 'pending' && <button onClick={() => updateStatus(order.id, 'confirmed')} className="p-1.5 hover:bg-green-50 text-green-600 rounded" title="Confirm"><FiCheck size={14} /></button>}
-                        {order.status === 'pending' && <button onClick={() => updateStatus(order.id, 'cancelled')} className="p-1.5 hover:bg-red-50 text-red-600 rounded" title="Cancel"><FiX size={14} /></button>}
                       </div>
                     </td>
                   </tr>
@@ -427,11 +425,15 @@ export default function AdminOrders() {
             )}
             <div>
               <h4 className="font-medium mb-2">Update Status:</h4>
-              <div className="flex flex-wrap gap-2">
-                {statusFlow.map(s => (
-                  <button key={s} onClick={() => updateStatus(selected.id, s)} className={`btn-sm rounded-lg text-xs ${selected.status === s ? 'btn-primary' : 'btn-secondary'}`}>{statusConfig[s]?.label || s}</button>
-                ))}
-              </div>
+              {selected.status === 'cancelled' ? (
+                <p className="text-sm text-gray-500">Cancelled transactions are locked and cannot be updated.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {statusFlow.map(s => (
+                    <button key={s} onClick={() => updateStatus(selected.id, s)} className={`btn-sm rounded-lg text-xs ${selected.status === s ? 'btn-primary' : 'btn-secondary'}`}>{statusConfig[s]?.label || s}</button>
+                  ))}
+                </div>
+              )}
             </div>
             <button onClick={() => setSelected(null)} className="btn-secondary w-full">Close</button>
           </div>

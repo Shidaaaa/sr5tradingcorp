@@ -9,6 +9,40 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const router = express.Router();
 
+function roundCurrency(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+async function syncOrderPaymentStatus(orderId, options = {}) {
+  const order = await Order.findById(orderId);
+  if (!order) return null;
+
+  const completedPayments = await Payment.find({ order_id: orderId, status: 'completed' }).lean();
+  const totalPaid = roundCurrency(completedPayments.reduce((sum, payment) => sum + (payment.amount || 0), 0));
+  const remainingBalance = Math.max(0, roundCurrency((order.total_amount || 0) - totalPaid));
+
+  const updates = {};
+  if (options.markReservationPaid) {
+    updates.reservation_fee_paid = true;
+  }
+
+  if (remainingBalance <= 0) {
+    updates.status = 'completed';
+  } else if (order.status === 'pending') {
+    updates.status = 'confirmed';
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await Order.findByIdAndUpdate(orderId, updates);
+  }
+
+  return {
+    totalPaid,
+    remainingBalance,
+    status: updates.status || order.status,
+  };
+}
+
 function isValidHttpUrl(value) {
   if (!value || typeof value !== 'string') return false;
   try {
@@ -79,14 +113,8 @@ router.post('/', authenticateToken, async (req, res) => {
       notes: notes || null,
     });
 
-    // Update order status for non-reservation direct payments
-    if (order_id && payment_type !== 'installment' && payment_type !== 'reservation') {
-      await Order.findByIdAndUpdate(order_id, { status: 'confirmed' });
-    }
-
-    // Mark order reservation fee paid
-    if (order_id && payment_type === 'reservation') {
-      await Order.findByIdAndUpdate(order_id, { reservation_fee_paid: true, status: 'confirmed' });
+    if (order_id) {
+      await syncOrderPaymentStatus(order_id, { markReservationPaid: payment_type === 'reservation' });
     }
 
     // Mark reservation fee as paid for booking payments
@@ -235,8 +263,7 @@ router.post('/stripe/verify', authenticateToken, async (req, res) => {
       receipt_number: generateReceiptNumber(),
     });
 
-    // Update order status
-    await Order.findByIdAndUpdate(orderId, { status: 'confirmed' });
+    await syncOrderPaymentStatus(orderId);
 
     res.json({ ...payment.toObject(), id: payment._id });
   } catch (err) {
@@ -434,7 +461,7 @@ router.post('/stripe/verify-order-reservation', authenticateToken, async (req, r
       receipt_number: generateReceiptNumber(),
     });
 
-    await Order.findByIdAndUpdate(orderId, { reservation_fee_paid: true, status: 'confirmed' });
+    await syncOrderPaymentStatus(orderId, { markReservationPaid: true });
 
     res.json({ ...payment.toObject(), id: payment._id, order_id: orderId });
   } catch (err) {

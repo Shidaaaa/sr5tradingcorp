@@ -38,6 +38,16 @@ function summarizeOrderPayments(order, payments) {
   };
 }
 
+async function autoCompleteOrderIfFullyPaid(order) {
+  const payments = await Payment.find({ order_id: order._id }).lean();
+  const summary = summarizeOrderPayments(order, payments);
+  if (summary.fullPaymentCompleted && order.status !== 'completed') {
+    order.status = 'completed';
+    await order.save();
+  }
+  return summary;
+}
+
 function generateInstallmentSchedule(order, pickupDate = new Date()) {
   if (!order.installment_months || !order.monthly_installment_amount || (order.installment_schedule || []).length > 0) {
     return order.installment_schedule || [];
@@ -147,6 +157,10 @@ router.get('/orders', authenticateToken, requireAdmin, async (req, res) => {
         created_at: p.created_at,
       }));
       const summary = summarizeOrderPayments(order, payments);
+      if (summary.fullPaymentCompleted && !['completed', 'cancelled', 'returned'].includes(order.status)) {
+        await Order.findByIdAndUpdate(order._id, { status: 'completed' });
+        order.status = 'completed';
+      }
       order.id = order._id;
       order.first_name = order.user_id?.first_name || 'Unknown';
       order.last_name = order.user_id?.last_name || '';
@@ -213,8 +227,16 @@ router.get('/orders/installments', authenticateToken, requireAdmin, async (req, 
 router.put('/orders/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { status } = req.body;
+    const allowedStatuses = ['picked_up', 'delivered'];
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Only picked up or delivered statuses are allowed from admin actions.' });
+    }
+
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found.' });
+    if (order.status === 'cancelled') {
+      return res.status(400).json({ error: 'Cancelled orders are locked and cannot be updated.' });
+    }
 
     const payments = await Payment.find({ order_id: order._id }).lean();
     const summary = summarizeOrderPayments(order, payments);
@@ -229,40 +251,6 @@ router.put('/orders/:id', authenticateToken, requireAdmin, async (req, res) => {
         }
       } else if (!summary.fullPaymentCompleted) {
         return res.status(400).json({ error: `Pickup requires full payment. Remaining balance: ${summary.remainingBalance.toFixed(2)}` });
-      }
-    }
-
-    if (status === 'cancelled' && order.status !== 'cancelled') {
-      const items = await OrderItem.find({ order_id: order._id }).lean();
-      for (const item of items) {
-        const product = await Product.findById(item.product_id);
-        if (!product) continue;
-
-        const hasSaleLog = await InventoryLog.exists({
-          product_id: product._id,
-          change_type: 'sale',
-          notes: `Order ${order.order_number}`,
-        });
-
-        if (hasSaleLog) {
-          product.stock_quantity += item.quantity;
-          if (product.stock_quantity > 0 && product.status === 'sold_out') product.status = 'available';
-          await InventoryLog.create({
-            product_id: product._id,
-            change_type: 'restock',
-            quantity_change: item.quantity,
-            previous_quantity: product.stock_quantity - item.quantity,
-            new_quantity: product.stock_quantity,
-            notes: `Order cancellation release ${order.order_number}`,
-            created_by: req.user.id,
-          });
-        }
-
-        if (product.type === 'vehicle') {
-          product.status = 'available';
-        }
-
-        await product.save();
       }
     }
 
@@ -304,6 +292,7 @@ router.put('/orders/:id', authenticateToken, requireAdmin, async (req, res) => {
 
     order.status = status;
     await order.save();
+    await autoCompleteOrderIfFullyPaid(order);
     res.json({ ...order.toObject(), id: order._id });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
@@ -347,6 +336,7 @@ router.put('/orders/:id/installments/:installmentNumber', authenticateToken, req
     order.installment_schedule[scheduleIndex].paid_at = new Date();
     order.installment_schedule[scheduleIndex].payment_id = payment._id;
     await order.save();
+    await autoCompleteOrderIfFullyPaid(order);
 
     res.json({ message: 'Installment marked as paid.', installment_number: installmentNumber, payment_id: payment._id });
   } catch (err) {
@@ -392,6 +382,8 @@ router.post('/orders/:id/pickup-payment', authenticateToken, requireAdmin, async
       notes: notes || 'Recorded at pickup',
       receipt_number: generateReceiptNumber(),
     });
+
+    await autoCompleteOrderIfFullyPaid(order);
 
     res.status(201).json({ ...payment.toObject(), id: payment._id });
   } catch (err) {
@@ -443,12 +435,7 @@ router.post('/orders/:id/mark-paid', authenticateToken, requireAdmin, async (req
       receipt_number: generateReceiptNumber(),
     });
 
-    const updatedPayments = await Payment.find({ order_id: order._id }).lean();
-    const updatedSummary = summarizeOrderPayments(order, updatedPayments);
-    if (updatedSummary.remainingBalance <= 0 && order.status !== 'completed') {
-      order.status = 'completed';
-      await order.save();
-    }
+    const updatedSummary = await autoCompleteOrderIfFullyPaid(order);
 
     res.status(201).json({
       ...payment.toObject(),
