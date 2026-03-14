@@ -13,6 +13,25 @@ const ReturnRequest = require('../models/ReturnRequest');
 
 const router = express.Router();
 
+function getUniqueCompletedPaymentTotal(payments = []) {
+  const seenRefs = new Set();
+  let total = 0;
+
+  for (const payment of payments) {
+    if (payment.status !== 'completed') continue;
+
+    const reference = payment.reference_number ? String(payment.reference_number) : null;
+    if (reference) {
+      if (seenRefs.has(reference)) continue;
+      seenRefs.add(reference);
+    }
+
+    total += Number(payment.amount || 0);
+  }
+
+  return total;
+}
+
 // Dashboard stats
 router.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -34,11 +53,11 @@ router.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
     ]);
 
     const totalRevenueResult = await Payment.aggregate([
-      { $match: { status: { $in: ['completed', 'pending'] } } },
+      { $match: { status: 'completed' } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]);
     const monthlyRevenueResult = await Payment.aggregate([
-      { $match: { status: { $in: ['completed', 'pending'] }, created_at: { $gte: monthStart } } },
+      { $match: { status: 'completed', created_at: { $gte: monthStart } } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]);
 
@@ -77,7 +96,7 @@ router.get('/orders', authenticateToken, requireAdmin, async (req, res) => {
       order.items = items.map(i => ({ id: i._id, name: i.product_id?.name, product_image: i.product_id?.image_url, quantity: i.quantity, unit_price: i.unit_price, subtotal: i.subtotal }));
       const payments = await Payment.find({ order_id: order._id, status: { $in: ['completed', 'pending'] } }).lean();
       order.payments = payments.map(p => ({ id: p._id, amount: p.amount, payment_method: p.payment_method, payment_type: p.payment_type, status: p.status, created_at: p.created_at }));
-      const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+      const totalPaid = getUniqueCompletedPaymentTotal(payments);
       order.id = order._id;
       order.first_name = order.user_id?.first_name || 'Unknown';
       order.last_name = order.user_id?.last_name || '';
@@ -165,7 +184,7 @@ router.get('/customers', authenticateToken, requireAdmin, async (req, res) => {
     for (const c of customers) {
       const order_count = await Order.countDocuments({ user_id: c._id });
       const spentAgg = await Payment.aggregate([
-        { $match: { user_id: c._id, status: { $in: ['completed', 'pending'] } } },
+        { $match: { user_id: c._id, status: 'completed' } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]);
       result.push({ ...c, id: c._id, order_count, total_spent: spentAgg[0]?.total || 0 });
@@ -246,7 +265,7 @@ router.get('/sales', authenticateToken, requireAdmin, async (req, res) => {
     for (const order of orders) {
       const items = await OrderItem.find({ order_id: order._id }).lean();
       const payments = await Payment.find({ order_id: order._id, status: { $in: ['completed', 'pending'] } }).lean();
-      const paid_amount = payments.reduce((sum, p) => sum + p.amount, 0);
+      const paid_amount = getUniqueCompletedPaymentTotal(payments);
       result.push({
         id: order._id,
         order_number: order.order_number,
@@ -452,7 +471,7 @@ router.get('/reports/monthly', authenticateToken, requireAdmin, async (req, res)
 
     // Sales by month
     const monthlyPayments = await Payment.aggregate([
-      { $match: { created_at: { $gte: startDate, $lt: endDate }, status: { $in: ['completed', 'pending'] } } },
+      { $match: { created_at: { $gte: startDate, $lt: endDate }, status: 'completed' } },
       { $group: { _id: { $month: '$created_at' }, total_revenue: { $sum: '$amount' }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } },
     ]);
@@ -503,14 +522,14 @@ router.get('/reports/revenue', authenticateToken, requireAdmin, async (req, res)
 
     // Total revenue
     const totalRevenueAgg = await Payment.aggregate([
-      { $match: { status: { $in: ['completed', 'pending'] } } },
+      { $match: { status: 'completed' } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]);
     const total_revenue = totalRevenueAgg[0]?.total || 0;
 
     // Monthly revenue
     const monthlyRevenueAgg = await Payment.aggregate([
-      { $match: { status: { $in: ['completed', 'pending'] }, created_at: { $gte: monthStart } } },
+      { $match: { status: 'completed', created_at: { $gte: monthStart } } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]);
     const monthly_revenue = monthlyRevenueAgg[0]?.total || 0;
@@ -520,7 +539,7 @@ router.get('/reports/revenue', authenticateToken, requireAdmin, async (req, res)
 
     // Revenue by payment method
     const revenueByMethod = await Payment.aggregate([
-      { $match: { status: { $in: ['completed', 'pending'] } } },
+      { $match: { status: 'completed' } },
       { $group: { _id: '$payment_method', total: { $sum: '$amount' } } },
     ]);
     const revenue_by_method = revenueByMethod.map(r => ({ payment_method: r._id || 'unknown', total: r.total }));
@@ -535,7 +554,7 @@ router.get('/reports/revenue', authenticateToken, requireAdmin, async (req, res)
 
     // Daily revenue (last 30 days)
     const dailyRevenueAgg = await Payment.aggregate([
-      { $match: { status: { $in: ['completed', 'pending'] }, created_at: { $gte: thirtyDaysAgo } } },
+      { $match: { status: 'completed', created_at: { $gte: thirtyDaysAgo } } },
       { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } }, total: { $sum: '$amount' } } },
       { $sort: { _id: 1 } },
     ]);

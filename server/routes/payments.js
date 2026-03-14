@@ -9,6 +9,39 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const router = express.Router();
 
+function isValidHttpUrl(value) {
+  if (!value || typeof value !== 'string') return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function getClientUrl(req) {
+  const candidates = [
+    process.env.CLIENT_URL,
+    process.env.FRONTEND_URL,
+    req.headers.origin,
+    'http://localhost:5173',
+  ];
+
+  const resolved = candidates.find(isValidHttpUrl) || 'http://localhost:5173';
+  return resolved.replace(/\/$/, '');
+}
+
+function getStripeImageUrl(rawUrl) {
+  if (!rawUrl) return null;
+  if (isValidHttpUrl(rawUrl)) return rawUrl;
+
+  if (rawUrl.startsWith('/') && isValidHttpUrl(process.env.PUBLIC_BASE_URL)) {
+    return `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}${rawUrl}`;
+  }
+
+  return null;
+}
+
 // Process payment
 router.post('/', authenticateToken, async (req, res) => {
   try {
@@ -34,7 +67,7 @@ router.post('/', authenticateToken, async (req, res) => {
       payment_method,
       payment_type: payment_type || 'full',
       reference_number: reference_number || null,
-      status: 'pending',
+      status: 'completed',
       receipt_number: generateReceiptNumber(),
       installment_number: installment_number || null,
       total_installments: total_installments || null,
@@ -94,6 +127,10 @@ router.get('/', authenticateToken, async (req, res) => {
 // Create Stripe Checkout Session for an order
 router.post('/stripe/create-session', authenticateToken, async (req, res) => {
   try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+    }
+
     const { order_id } = req.body;
     if (!order_id) return res.status(400).json({ error: 'Order ID is required.' });
 
@@ -101,20 +138,34 @@ router.post('/stripe/create-session', authenticateToken, async (req, res) => {
     if (!order) return res.status(404).json({ error: 'Order not found.' });
 
     const items = await OrderItem.find({ order_id: order._id }).populate('product_id', 'name image_url').lean();
+    if (!items.length) return res.status(400).json({ error: 'Order has no items to pay for.' });
 
-    const line_items = items.map(item => ({
-      price_data: {
-        currency: 'php',
-        product_data: {
-          name: item.product_id?.name || 'Product',
-          ...(item.product_id?.image_url ? { images: [item.product_id.image_url] } : {}),
+    if (!Number.isFinite(order.total_amount) || order.total_amount <= 0) {
+      return res.status(400).json({ error: 'Invalid order total for online payment.' });
+    }
+
+    for (const item of items) {
+      if (!Number.isFinite(item.unit_price) || item.unit_price <= 0 || !Number.isFinite(item.quantity) || item.quantity <= 0) {
+        return res.status(400).json({ error: 'Order contains invalid line item amounts for Stripe payment.' });
+      }
+    }
+
+    const line_items = items.map(item => {
+      const imageUrl = getStripeImageUrl(item.product_id?.image_url);
+      return {
+        price_data: {
+          currency: 'php',
+          product_data: {
+            name: item.product_id?.name || 'Product',
+            ...(imageUrl ? { images: [imageUrl] } : {}),
+          },
+          unit_amount: Math.round(item.unit_price * 100),
         },
-        unit_amount: Math.round(item.unit_price * 100),
-      },
-      quantity: item.quantity,
-    }));
+        quantity: item.quantity,
+      };
+    });
 
-    const clientUrl = req.headers.origin || 'http://localhost:5173';
+    const clientUrl = getClientUrl(req);
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -139,6 +190,10 @@ router.post('/stripe/create-session', authenticateToken, async (req, res) => {
 // Verify Stripe payment and record it
 router.post('/stripe/verify', authenticateToken, async (req, res) => {
   try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+    }
+
     const { session_id } = req.body;
     if (!session_id) return res.status(400).json({ error: 'Session ID is required.' });
 
@@ -146,6 +201,10 @@ router.post('/stripe/verify', authenticateToken, async (req, res) => {
 
     if (session.payment_status !== 'paid') {
       return res.status(400).json({ error: 'Payment not completed.' });
+    }
+
+    if (!Number.isFinite(session.amount_total) || session.amount_total <= 0) {
+      return res.status(400).json({ error: 'Invalid paid amount from payment session.' });
     }
 
     // Check if already recorded
@@ -189,6 +248,10 @@ router.get('/stripe/config', (req, res) => {
 // Create Stripe Checkout Session for a booking reservation fee
 router.post('/stripe/create-reservation-session', authenticateToken, async (req, res) => {
   try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+    }
+
     const { booking_id } = req.body;
     if (!booking_id) return res.status(400).json({ error: 'Booking ID is required.' });
 
@@ -197,7 +260,7 @@ router.post('/stripe/create-reservation-session', authenticateToken, async (req,
     if (booking.reservation_fee_paid) return res.status(400).json({ error: 'Reservation fee already paid.' });
     if (!booking.reservation_fee || booking.reservation_fee <= 0) return res.status(400).json({ error: 'No reservation fee for this booking.' });
 
-    const clientUrl = req.headers.origin || 'http://localhost:5173';
+    const clientUrl = getClientUrl(req);
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -233,11 +296,18 @@ router.post('/stripe/create-reservation-session', authenticateToken, async (req,
 // Verify Stripe reservation fee payment and mark booking as paid
 router.post('/stripe/verify-reservation', authenticateToken, async (req, res) => {
   try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+    }
+
     const { session_id } = req.body;
     if (!session_id) return res.status(400).json({ error: 'Session ID is required.' });
 
     const session = await stripe.checkout.sessions.retrieve(session_id);
     if (session.payment_status !== 'paid') return res.status(400).json({ error: 'Payment not completed.' });
+    if (!Number.isFinite(session.amount_total) || session.amount_total <= 0) {
+      return res.status(400).json({ error: 'Invalid paid amount from payment session.' });
+    }
 
     const existing = await Payment.findOne({ reference_number: session.id });
     if (existing) return res.json({ ...existing.toObject(), id: existing._id, already_recorded: true });
@@ -271,6 +341,10 @@ router.post('/stripe/verify-reservation', authenticateToken, async (req, res) =>
 // Create Stripe Checkout Session for an order reservation fee (vehicle orders)
 router.post('/stripe/create-order-reservation-session', authenticateToken, async (req, res) => {
   try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+    }
+
     const { order_id } = req.body;
     if (!order_id) return res.status(400).json({ error: 'Order ID is required.' });
 
@@ -279,9 +353,14 @@ router.post('/stripe/create-order-reservation-session', authenticateToken, async
     if (!order.has_vehicle || !order.reservation_fee_total || order.reservation_fee_total <= 0) {
       return res.status(400).json({ error: 'This order has no vehicle reservation fee.' });
     }
+
+    if (!Number.isFinite(order.reservation_fee_total) || order.reservation_fee_total <= 0) {
+      return res.status(400).json({ error: 'Invalid reservation fee amount for Stripe payment.' });
+    }
+
     if (order.reservation_fee_paid) return res.status(400).json({ error: 'Reservation fee already paid.' });
 
-    const clientUrl = req.headers.origin || 'http://localhost:5173';
+    const clientUrl = getClientUrl(req);
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -317,11 +396,18 @@ router.post('/stripe/create-order-reservation-session', authenticateToken, async
 // Verify Stripe order reservation fee payment and mark order as reserved-paid
 router.post('/stripe/verify-order-reservation', authenticateToken, async (req, res) => {
   try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+    }
+
     const { session_id } = req.body;
     if (!session_id) return res.status(400).json({ error: 'Session ID is required.' });
 
     const session = await stripe.checkout.sessions.retrieve(session_id);
     if (session.payment_status !== 'paid') return res.status(400).json({ error: 'Payment not completed.' });
+    if (!Number.isFinite(session.amount_total) || session.amount_total <= 0) {
+      return res.status(400).json({ error: 'Invalid paid amount from payment session.' });
+    }
 
     const existing = await Payment.findOne({ reference_number: session.id });
     if (existing) return res.json({ ...existing.toObject(), id: existing._id, already_recorded: true });

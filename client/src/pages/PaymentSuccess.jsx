@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import { FiCheckCircle, FiAlertCircle, FiFileText, FiShoppingBag, FiCalendar } from 'react-icons/fi';
@@ -10,11 +10,16 @@ export default function PaymentSuccess() {
   const [payment, setPayment] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const verifiedKeyRef = useRef(null);
 
   useEffect(() => {
     const sessionId = searchParams.get('session_id');
     const type = searchParams.get('type');
+
     if (sessionId) {
+      const verifyKey = `${sessionId}:${type || 'order'}`;
+      if (verifiedKeyRef.current === verifyKey) return;
+      verifiedKeyRef.current = verifyKey;
       verifyPayment(sessionId, type);
     } else {
       setError('No payment session found.');

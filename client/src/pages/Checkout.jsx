@@ -25,7 +25,7 @@ export default function Checkout() {
   const [form, setForm] = useState({
     delivery_method: 'pickup',
     delivery_address: user?.address || '',
-    payment_method: 'cash',
+    payment_method: 'credit_card',
     notes: '',
   });
 
@@ -42,15 +42,21 @@ export default function Checkout() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (cart.items.length === 0) { toast.error('Cart is empty'); return; }
+    if (!Number.isFinite(cart.total) || cart.total <= 0) {
+      toast.error('Order total must be greater than zero. Please review your cart items.');
+      return;
+    }
+
+    let orderId = null;
     setLoading(true);
     try {
       const data = await api.placeOrder(form);
-      const orderId = data.id || data._id;
+      orderId = data.id || data._id;
       await fetchCart();
 
       // Vehicle orders require reservation fee payment online.
       if (data.has_vehicle && data.reservation_fee_total > 0) {
-        toast.success(`Order created. Pay reservation fee ${formatPrice(data.reservation_fee_total)} to secure your vehicle.`);
+        toast('Redirecting to secure payment...');
         const session = await api.createStripeOrderReservationSession({ order_id: orderId });
         window.location.href = session.url;
         return;
@@ -58,7 +64,7 @@ export default function Checkout() {
 
       // For card payments, redirect to Stripe Checkout
       if (form.payment_method === 'credit_card' || form.payment_method === 'debit_card') {
-        toast.success('Order created! Redirecting to payment...');
+        toast('Redirecting to secure payment...');
         const session = await api.createStripeSession({ order_id: orderId });
         window.location.href = session.url;
         return;
@@ -67,6 +73,11 @@ export default function Checkout() {
       toast.success('Order placed successfully!');
       navigate(`/orders/${orderId}`);
     } catch (err) {
+      if (orderId && (form.payment_method === 'credit_card' || form.payment_method === 'debit_card')) {
+        toast.error(`${err.message} You can retry payment from your order details.`);
+        navigate(`/orders/${orderId}`);
+        return;
+      }
       toast.error(err.message);
     } finally {
       setLoading(false);
@@ -165,7 +176,7 @@ export default function Checkout() {
               <span>Total</span>
               <span className="text-accent-600">{formatPrice(cart.total)}</span>
             </div>
-            <button type="submit" disabled={loading || cart.items.length === 0} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
+            <button type="submit" disabled={loading || cart.items.length === 0 || !Number.isFinite(cart.total) || cart.total <= 0} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
               {loading
                 ? 'Processing...'
                 : hasVehicleOrder

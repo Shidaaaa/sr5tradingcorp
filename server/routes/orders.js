@@ -11,6 +11,25 @@ const { generateOrderNumber, calculateReservationFee } = require('../utils/helpe
 
 const router = express.Router();
 
+function getUniqueCompletedPaymentTotal(payments = []) {
+  const seenRefs = new Set();
+  let total = 0;
+
+  for (const payment of payments) {
+    if (payment.status !== 'completed') continue;
+
+    const reference = payment.reference_number ? String(payment.reference_number) : null;
+    if (reference) {
+      if (seenRefs.has(reference)) continue;
+      seenRefs.add(reference);
+    }
+
+    total += Number(payment.amount || 0);
+  }
+
+  return total;
+}
+
 function getItemReservationExpiry(productType) {
   const now = new Date();
   if (productType === 'vehicle') {
@@ -56,7 +75,7 @@ async function enrichOrder(order) {
   const items = await OrderItem.find({ order_id: order._id }).populate('product_id', 'name image_url type').lean();
   const payments = await Payment.find({ order_id: order._id, status: { $in: ['completed', 'pending'] } }).sort({ created_at: -1 }).lean();
 
-  const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const totalPaid = getUniqueCompletedPaymentTotal(payments);
 
   order.items = items.map(i => ({
     id: i._id,
