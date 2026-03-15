@@ -1,5 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 
+const VEHICLE_RESERVATION_RATE = 0.05;
+
 function generateOrderNumber() {
   const date = new Date();
   const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
@@ -40,16 +42,36 @@ function getVehicleReservationExpiry(is_popular) {
   return now;
 }
 
-// Calculates the reservation fee for a vehicle based on popularity
-// Popular: 5% of price (min PHP 5,000 / max PHP 50,000)
-// Standard: 2% of price (min PHP 2,000 / max PHP 30,000)
 function calculateReservationFee(product) {
   if (!product || product.type !== 'vehicle') return 0;
-  const rate = product.is_popular ? 0.05 : 0.02;
-  const min = product.is_popular ? 5000 : 2000;
-  const max = product.is_popular ? 50000 : 30000;
-  const fee = Math.round(product.price * rate);
-  return Math.max(min, Math.min(max, fee));
+  const fee = Math.round((product.price || 0) * VEHICLE_RESERVATION_RATE);
+  return Math.max(0, fee);
+}
+
+function roundCurrency(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function calculateInstallmentBreakdown(remainingBalance, options = {}) {
+  const remaining = roundCurrency(remainingBalance);
+  const downPaymentRate = Number(options.downPaymentRate ?? 0.5);
+  const numberOfInstallments = Number(options.numberOfInstallments ?? 12);
+  const interestRate = Number(options.interestRate ?? 0.01);
+
+  const downPaymentAmount = roundCurrency(remaining * downPaymentRate);
+  const financedAmount = roundCurrency(Math.max(0, remaining - downPaymentAmount));
+  const monthlyAmount = roundCurrency((financedAmount / numberOfInstallments) * (1 + interestRate));
+  const totalWithInterest = roundCurrency(monthlyAmount * numberOfInstallments);
+
+  return {
+    remainingBalance: remaining,
+    downPaymentAmount,
+    financedAmount,
+    numberOfInstallments,
+    interestRate,
+    monthlyAmount,
+    totalWithInterest,
+  };
 }
 
 function getMaxReservationDays(productType) {
@@ -79,6 +101,8 @@ module.exports = {
   getReservationExpiry,
   getVehicleReservationExpiry,
   calculateReservationFee,
+  calculateInstallmentBreakdown,
+  VEHICLE_RESERVATION_RATE,
   getMaxReservationDays,
   addBufferTime,
   formatCurrency

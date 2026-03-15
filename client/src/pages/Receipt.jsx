@@ -83,6 +83,14 @@ export default function Receipt() {
               <span>{formatPrice(receipt.remaining_balance)}</span>
             </div>
           )}
+          {receipt.receipt_image_url && (
+            <div className="pt-2">
+              <p className="text-sm text-gray-500 mb-1">Uploaded Store Receipt</p>
+              <a href={receipt.receipt_image_url} target="_blank" rel="noreferrer" className="text-sm text-accent-600 hover:text-accent-700 underline">
+                View uploaded receipt proof
+              </a>
+            </div>
+          )}
         </div>
 
         <div className="mt-8 text-center text-xs text-gray-400 border-t pt-4">

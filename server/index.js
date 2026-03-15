@@ -4,6 +4,7 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const { connectDatabase } = require('./config/database');
+const { startInstallmentReminderJob } = require('./services/installmentReminderJob');
 
 const app = express();
 
@@ -41,6 +42,7 @@ app.get('/api/health', (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 connectDatabase().then(() => {
+  startInstallmentReminderJob();
   app.listen(PORT, () => {
     console.log(`SR-5 Trading Corporation API running on port ${PORT}`);
   });
