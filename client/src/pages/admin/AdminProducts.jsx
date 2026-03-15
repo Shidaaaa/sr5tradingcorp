@@ -110,6 +110,8 @@ export default function AdminProducts() {
   const [sortDir, setSortDir] = useState('asc');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [stockDrafts, setStockDrafts] = useState({});
+  const [savingStockId, setSavingStockId] = useState(null);
 
   const handleSort = (field) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -141,8 +143,41 @@ export default function AdminProducts() {
   const fetchAll = async () => {
     try {
       const [prods, cats] = await Promise.all([api.getProducts(), api.getCategories()]);
-      setProducts(prods); setCategories(cats);
+      setProducts(prods);
+      setCategories(cats);
+      setStockDrafts(Object.fromEntries(prods.map(product => [product.id, String(product.stock_quantity ?? 0)])));
     } catch {} finally { setLoading(false); }
+  };
+
+  const handleStockDraftChange = (productId, value) => {
+    if (!/^\d*$/.test(value)) return;
+    setStockDrafts(prev => ({ ...prev, [productId]: value }));
+  };
+
+  const saveInlineStock = async (product) => {
+    const raw = stockDrafts[product.id];
+    const nextStock = Number(raw === '' ? 0 : raw);
+    const currentStock = Number(product.stock_quantity || 0);
+
+    if (!Number.isFinite(nextStock) || nextStock < 0) {
+      setStockDrafts(prev => ({ ...prev, [product.id]: String(currentStock) }));
+      toast.error('Stock must be a non-negative number.');
+      return;
+    }
+
+    if (nextStock === currentStock) return;
+
+    setSavingStockId(product.id);
+    try {
+      const updated = await api.updateProduct(product.id, { stock_quantity: nextStock });
+      setProducts(prev => prev.map(item => item.id === product.id ? { ...item, ...updated } : item));
+      setStockDrafts(prev => ({ ...prev, [product.id]: String(updated.stock_quantity ?? nextStock) }));
+    } catch (err) {
+      setStockDrafts(prev => ({ ...prev, [product.id]: String(currentStock) }));
+      toast.error(err.message);
+    } finally {
+      setSavingStockId(null);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -414,7 +449,26 @@ export default function AdminProducts() {
                   <td className="px-4 py-3"><span className="badge badge-info capitalize">{p.type}</span></td>
                   <td className="px-4 py-3 font-medium">{formatPrice(p.price)}</td>
                   <td className="px-4 py-3">
-                    <span>{p.stock_quantity}</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={stockDrafts[p.id] ?? String(p.stock_quantity ?? 0)}
+                        onChange={e => handleStockDraftChange(p.id, e.target.value)}
+                        onBlur={() => saveInlineStock(p)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        disabled={savingStockId === p.id}
+                        className="input-field h-8 w-20 text-center px-2"
+                        aria-label={`Stock quantity for ${p.name}`}
+                      />
+                      {savingStockId === p.id && <span className="text-xs text-gray-500">Saving...</span>}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-gray-600">{p.location || '-'}</td>
                   <td className="px-4 py-3">{statusBadge(p.status)}</td>
