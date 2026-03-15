@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const User = require('../models/User');
 const Product = require('../models/Product');
@@ -10,9 +11,18 @@ const Booking = require('../models/Booking');
 const InventoryLog = require('../models/InventoryLog');
 const Feedback = require('../models/Feedback');
 const ReturnRequest = require('../models/ReturnRequest');
+const VehicleInquiry = require('../models/VehicleInquiry');
 const { generateReceiptNumber } = require('../utils/helpers');
 
 const router = express.Router();
+
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
 
 function roundCurrency(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
@@ -901,6 +911,58 @@ router.get('/reports/revenue', authenticateToken, requireAdmin, async (req, res)
     res.json({ total_revenue, monthly_revenue, total_orders, revenue_by_method, revenue_by_type, daily_revenue });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// ──────────────────────────────────────────────
+// VEHICLE INQUIRY MANAGEMENT (Admin)
+// ──────────────────────────────────────────────
+
+// GET /admin/inquiries — List all inquiries with optional status filter
+router.get('/inquiries', adminLimiter, authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.status) filter.status = req.query.status;
+
+    const inquiries = await VehicleInquiry.find(filter)
+      .populate('user_id', 'first_name last_name email phone')
+      .populate('product_id', 'name image_url vehicle_category price')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json(inquiries);
+  } catch (err) {
+    console.error('Admin get inquiries error:', err);
+    return res.status(500).json({ error: 'Failed to fetch inquiries' });
+  }
+});
+
+// PUT /admin/inquiries/:id — Update inquiry status (approve / reject)
+router.put('/inquiries/:id', adminLimiter, authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { status, admin_notes } = req.body;
+    const allowed = ['approved', 'rejected'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` });
+    }
+
+    const inquiry = await VehicleInquiry.findById(req.params.id);
+    if (!inquiry) return res.status(404).json({ error: 'Inquiry not found' });
+    if (inquiry.status === 'converted' || inquiry.status === 'cancelled') {
+      return res.status(400).json({ error: 'Converted or cancelled inquiries cannot be modified' });
+    }
+
+    inquiry.status = status;
+    if (admin_notes !== undefined) inquiry.admin_notes = admin_notes;
+    await inquiry.save();
+
+    await inquiry.populate('user_id', 'first_name last_name email');
+    await inquiry.populate('product_id', 'name image_url vehicle_category price');
+
+    return res.json(inquiry);
+  } catch (err) {
+    console.error('Admin update inquiry error:', err);
+    return res.status(500).json({ error: 'Failed to update inquiry' });
   }
 });
 

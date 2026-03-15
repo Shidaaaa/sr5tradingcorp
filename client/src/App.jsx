@@ -17,6 +17,8 @@ import Feedback from './pages/Feedback';
 import Receipt from './pages/Receipt';
 import PaymentSuccess from './pages/PaymentSuccess';
 import Services from './pages/Services';
+import VehicleInquiry from './pages/VehicleInquiry';
+import CustomerInstallments from './pages/CustomerInstallments';
 import AdminLayout from './pages/admin/AdminLayout';
 import Dashboard from './pages/admin/Dashboard';
 import AdminProducts from './pages/admin/AdminProducts';
@@ -28,6 +30,7 @@ import AdminCustomers from './pages/admin/AdminCustomers';
 import AdminFeedback from './pages/admin/AdminFeedback';
 import AdminReports from './pages/admin/AdminReports';
 import AdminReturns from './pages/admin/AdminReturns';
+import AdminInquiries from './pages/admin/AdminInquiries';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -63,6 +66,8 @@ export default function App() {
         <Route path="orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
         <Route path="orders/:id" element={<ProtectedRoute><OrderDetail /></ProtectedRoute>} />
         <Route path="bookings" element={<ProtectedRoute><Bookings /></ProtectedRoute>} />
+        <Route path="installments" element={<ProtectedRoute><CustomerInstallments /></ProtectedRoute>} />
+        <Route path="inquiries/new" element={<ProtectedRoute><VehicleInquiry /></ProtectedRoute>} />
         <Route path="profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
         <Route path="feedback" element={<ProtectedRoute><Feedback /></ProtectedRoute>} />
         <Route path="receipt/:receiptNumber" element={<ProtectedRoute><Receipt /></ProtectedRoute>} />
@@ -80,6 +85,7 @@ export default function App() {
         <Route path="feedback" element={<AdminFeedback />} />
         <Route path="reports" element={<AdminReports />} />
         <Route path="returns" element={<AdminReturns />} />
+        <Route path="inquiries" element={<AdminInquiries />} />
       </Route>
     </Routes>
   );

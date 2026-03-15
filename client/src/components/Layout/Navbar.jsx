@@ -1,7 +1,7 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
-import { FiShoppingCart, FiUser, FiMenu, FiX, FiLogOut, FiPackage, FiCalendar, FiMessageSquare, FiSettings, FiChevronDown, FiTruck, FiTool } from 'react-icons/fi';
+import { FiShoppingCart, FiUser, FiMenu, FiX, FiLogOut, FiPackage, FiCalendar, FiMessageSquare, FiSettings, FiChevronDown, FiTruck, FiTool, FiDollarSign } from 'react-icons/fi';
 import { useState, useRef, useEffect } from 'react';
 
 export default function Navbar() {
@@ -87,6 +87,7 @@ export default function Navbar() {
             <NavLink to="/services" className={navLinkClass}>Services</NavLink>
             {user && <NavLink to="/bookings" className={navLinkClass}>Appointments</NavLink>}
             {user && <NavLink to="/orders" className={navLinkClass}>My Orders</NavLink>}
+            {user && <NavLink to="/installments" className={navLinkClass}>Installments</NavLink>}
           </div>
 
           {/* Right Section */}
@@ -122,6 +123,7 @@ export default function Navbar() {
                       </div>
                       <Link to="/profile" onClick={() => setUserMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white"><FiUser size={16} /> Profile</Link>
                       <Link to="/orders" onClick={() => setUserMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white"><FiPackage size={16} /> My Orders</Link>
+                      <Link to="/installments" onClick={() => setUserMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white"><FiDollarSign size={16} /> My Installments</Link>
                       <Link to="/bookings" onClick={() => setUserMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white"><FiCalendar size={16} /> Appointments</Link>
                       <Link to="/feedback" onClick={() => setUserMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white"><FiMessageSquare size={16} /> Feedback</Link>
                       {user.role === 'admin' && (
@@ -156,6 +158,7 @@ export default function Navbar() {
             <Link to="/services" onClick={() => setMobileMenu(false)} className="block px-3 py-2.5 rounded-lg text-gray-300 hover:bg-navy-800 hover:text-white">Services</Link>
             {user && <Link to="/bookings" onClick={() => setMobileMenu(false)} className="block px-3 py-2.5 rounded-lg text-gray-300 hover:bg-navy-800 hover:text-white">Appointments</Link>}
             {user && <Link to="/orders" onClick={() => setMobileMenu(false)} className="block px-3 py-2.5 rounded-lg text-gray-300 hover:bg-navy-800 hover:text-white">My Orders</Link>}
+            {user && <Link to="/installments" onClick={() => setMobileMenu(false)} className="block px-3 py-2.5 rounded-lg text-gray-300 hover:bg-navy-800 hover:text-white">My Installments</Link>}
           </div>
         )}
       </div>

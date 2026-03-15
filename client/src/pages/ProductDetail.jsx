@@ -4,9 +4,21 @@ import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import toast from 'react-hot-toast';
-import { FiShoppingCart, FiCalendar, FiMapPin, FiTag, FiInfo, FiArrowLeft, FiMinus, FiPlus, FiTruck, FiCheck, FiClock } from 'react-icons/fi';
+import { FiShoppingCart, FiCalendar, FiMapPin, FiTag, FiInfo, FiArrowLeft, FiMinus, FiPlus, FiTruck, FiCheck, FiClock, FiFileText, FiDollarSign } from 'react-icons/fi';
 
 const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price);
+
+const INSTALLMENT_PLAN = {
+  downpaymentRate: 0.5,
+  months: 12,
+  interestRate: 0.01,
+  label: '50% Downpayment • 12 Months • 1% Monthly Interest',
+};
+
+function computeMonthly(price) {
+  const financed = price * (1 - INSTALLMENT_PLAN.downpaymentRate);
+  return Math.round((financed * (1 + INSTALLMENT_PLAN.interestRate * INSTALLMENT_PLAN.months)) / INSTALLMENT_PLAN.months * 100) / 100;
+}
 
 const FALLBACK_IMAGES = {
   truck: 'https://images.unsplash.com/photo-1580674285054-bed31e145f59?auto=format&fit=crop&w=1400&q=80',
@@ -113,6 +125,29 @@ export default function ProductDetail() {
               )}
             </div>
 
+            {/* Installment Calculator (vehicles only) */}
+            {product.type === 'vehicle' && product.status === 'available' && (
+              <div className="bg-blue-50 rounded-xl p-5 border border-blue-200">
+                <div className="flex items-center gap-2 mb-3">
+                  <FiDollarSign className="text-blue-600" />
+                  <h3 className="font-bold text-blue-900 text-sm">Installment Plan Available</h3>
+                </div>
+                <p className="text-xs text-blue-700 mb-3">{INSTALLMENT_PLAN.label}</p>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="bg-white rounded-lg p-3 border border-blue-200">
+                    <p className="text-xs text-gray-500">50% Downpayment</p>
+                    <p className="font-bold text-navy-900">{formatPrice(product.price * 0.5)}</p>
+                    <p className="text-xs text-gray-400">Due at pickup</p>
+                  </div>
+                  <div className="bg-white rounded-lg p-3 border border-blue-200">
+                    <p className="text-xs text-gray-500">Monthly Payment</p>
+                    <p className="font-bold text-navy-900">{formatPrice(computeMonthly(product.price))}</p>
+                    <p className="text-xs text-gray-400">× 12 months</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Description */}
             {product.description && (
               <div>
@@ -191,6 +226,18 @@ export default function ProductDetail() {
               {product.type === 'vehicle' && user && (
                 <Link to={`/bookings?product_id=${product.id}&product_name=${encodeURIComponent(product.name)}`} className="w-full btn-accent py-3.5 rounded-xl flex items-center justify-center gap-2 text-lg">
                   <FiCalendar /> Book Test Drive
+                </Link>
+              )}
+
+              {product.type === 'vehicle' && product.status === 'available' && user && (
+                <Link to={`/inquiries/new?product_id=${product.id}`} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 text-lg">
+                  <FiFileText /> Apply for Installment
+                </Link>
+              )}
+
+              {product.type === 'vehicle' && !user && (
+                <Link to="/login" className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 text-lg">
+                  <FiFileText /> Sign In to Apply for Installment
                 </Link>
               )}
 
