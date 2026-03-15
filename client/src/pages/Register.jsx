@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
-import { FiArrowRight } from 'react-icons/fi';
+import { FiArrowRight, FiEye, FiEyeOff } from 'react-icons/fi';
 
 export default function Register() {
   const [form, setForm] = useState({ first_name: '', last_name: '', email: '', password: '', confirmPassword: '', phone: '', address: '', city: '' });
+  const [showPasswords, setShowPasswords] = useState({ password: false, confirmPassword: false });
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
   const navigate = useNavigate();
@@ -100,11 +101,45 @@ export default function Register() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-navy-900 mb-1.5">Password *</label>
-                <input type="password" name="password" value={form.password} onChange={handleChange} className="input-field" required />
+                <div className="relative">
+                  <input
+                    type={showPasswords.password ? 'text' : 'password'}
+                    name="password"
+                    value={form.password}
+                    onChange={handleChange}
+                    className="input-field pr-10"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPasswords(prev => ({ ...prev, password: !prev.password }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    aria-label={showPasswords.password ? 'Hide password' : 'Show password'}
+                  >
+                    {showPasswords.password ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-navy-900 mb-1.5">Confirm Password *</label>
-                <input type="password" name="confirmPassword" value={form.confirmPassword} onChange={handleChange} className="input-field" required />
+                <div className="relative">
+                  <input
+                    type={showPasswords.confirmPassword ? 'text' : 'password'}
+                    name="confirmPassword"
+                    value={form.confirmPassword}
+                    onChange={handleChange}
+                    className="input-field pr-10"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPasswords(prev => ({ ...prev, confirmPassword: !prev.confirmPassword }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    aria-label={showPasswords.confirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                  >
+                    {showPasswords.confirmPassword ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+                  </button>
+                </div>
               </div>
             </div>
 

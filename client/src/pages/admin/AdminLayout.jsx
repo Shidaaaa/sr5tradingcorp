@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Toaster } from 'react-hot-toast';
-import { FiGrid, FiPackage, FiShoppingCart, FiCalendar, FiBox, FiDollarSign, FiUsers, FiMessageSquare, FiBarChart2, FiArrowLeft, FiRefreshCw, FiLogOut, FiMenu, FiX } from 'react-icons/fi';
+import { FiGrid, FiPackage, FiShoppingCart, FiCalendar, FiBox, FiDollarSign, FiUsers, FiMessageSquare, FiArrowLeft, FiRefreshCw, FiLogOut, FiMenu, FiX } from 'react-icons/fi';
 
 const navItems = [
   { path: '/admin', icon: <FiGrid />, label: 'Dashboard', exact: true },
@@ -14,7 +14,6 @@ const navItems = [
   { path: '/admin/customers', icon: <FiUsers />, label: 'Customers' },
   { path: '/admin/feedback', icon: <FiMessageSquare />, label: 'Feedback' },
   { path: '/admin/returns', icon: <FiRefreshCw />, label: 'Returns' },
-  { path: '/admin/reports', icon: <FiBarChart2 />, label: 'Reports' },
 ];
 
 export default function AdminLayout() {
@@ -22,6 +21,13 @@ export default function AdminLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const handleLogout = () => {
+    const shouldLogout = window.confirm('Are you sure you would like to log out?');
+    if (!shouldLogout) return;
+    logout();
+    navigate('/');
+  };
 
   return (
     <div className="flex min-h-screen bg-gray-100">
@@ -61,7 +67,7 @@ export default function AdminLayout() {
           <Link to="/" onClick={() => setSidebarOpen(false)} className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-gray-300 hover:bg-navy-800 hover:text-white transition-colors">
             <FiArrowLeft /> Back to Store
           </Link>
-          <button onClick={() => { logout(); navigate('/'); }} className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-red-400 hover:bg-navy-800 w-full transition-colors">
+          <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-red-400 hover:bg-navy-800 w-full transition-colors">
             <FiLogOut /> Logout
           </button>
         </div>

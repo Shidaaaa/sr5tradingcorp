@@ -24,6 +24,8 @@ export default function Navbar() {
   }, []);
 
   const handleLogout = () => {
+    const shouldLogout = window.confirm('Are you sure you would like to log out?');
+    if (!shouldLogout) return;
     logout();
     navigate('/');
     setUserMenu(false);
