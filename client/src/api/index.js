@@ -82,6 +82,14 @@ export const api = {
   createStripeOrderReservationSession: (data) => apiRequest('/payments/stripe/create-order-reservation-session', { method: 'POST', body: JSON.stringify(data) }),
   verifyStripeOrderReservationPayment: (data) => apiRequest('/payments/stripe/verify-order-reservation', { method: 'POST', body: JSON.stringify(data) }),
 
+  // Inquiries (Vehicle Installment)
+  getInquiries: () => apiRequest('/inquiries'),
+  getInquiry: (id) => apiRequest(`/inquiries/${id}`),
+  createInquiry: (data) => apiRequest('/inquiries', { method: 'POST', body: JSON.stringify(data) }),
+  cancelInquiry: (id) => apiRequest(`/inquiries/${id}`, { method: 'DELETE' }),
+  getAdminInquiries: (status) => apiRequest(`/admin/inquiries${status ? '?status=' + status : ''}`),
+  updateAdminInquiry: (id, data) => apiRequest(`/admin/inquiries/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
   // Feedback
   getFeedback: () => apiRequest('/feedback'),
   submitFeedback: (data) => apiRequest('/feedback', { method: 'POST', body: JSON.stringify(data) }),

@@ -23,6 +23,7 @@ app.use('/api/orders', require('./routes/orders'));
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/feedback', require('./routes/feedback'));
+app.use('/api/inquiries', require('./routes/inquiries'));
 app.use('/api/admin', require('./routes/admin'));
 
 // Serve static files in production

@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Toaster } from 'react-hot-toast';
-import { FiGrid, FiPackage, FiShoppingCart, FiCalendar, FiBox, FiDollarSign, FiUsers, FiMessageSquare, FiBarChart2, FiArrowLeft, FiRefreshCw, FiLogOut, FiMenu, FiX } from 'react-icons/fi';
+import { FiGrid, FiPackage, FiShoppingCart, FiCalendar, FiBox, FiDollarSign, FiUsers, FiMessageSquare, FiBarChart2, FiArrowLeft, FiRefreshCw, FiLogOut, FiMenu, FiX, FiFileText } from 'react-icons/fi';
 
 const navItems = [
   { path: '/admin', icon: <FiGrid />, label: 'Dashboard', exact: true },
   { path: '/admin/products', icon: <FiPackage />, label: 'Products' },
   { path: '/admin/orders', icon: <FiShoppingCart />, label: 'Orders' },
+  { path: '/admin/inquiries', icon: <FiFileText />, label: 'Inquiries' },
   { path: '/admin/bookings', icon: <FiCalendar />, label: 'Bookings' },
   { path: '/admin/inventory', icon: <FiBox />, label: 'Inventory' },
   { path: '/admin/sales', icon: <FiDollarSign />, label: 'Sales' },
