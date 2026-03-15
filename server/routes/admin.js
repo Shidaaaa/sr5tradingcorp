@@ -187,7 +187,7 @@ router.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
       Feedback.countDocuments({ status: 'pending' }),
       ReturnRequest.countDocuments({ status: 'pending' }),
       Product.countDocuments({ status: 'sold_out' }),
-      Product.countDocuments({ stock_quantity: { $lte: 5 }, type: { $ne: 'vehicle' } }),
+      Product.countDocuments({ stock_quantity: { $gt: 0, $lte: 5 } }),
     ]);
 
     const totalRevenueResult = await Payment.aggregate([
@@ -710,7 +710,7 @@ router.get('/inventory', authenticateToken, requireAdmin, async (req, res) => {
       category_id: p.category_id?._id || null,
       times_sold: soldMap[p._id.toString()] || 0,
     }));
-    const low_stock = products.filter(p => p.type !== 'vehicle' && p.stock_quantity > 0 && p.stock_quantity <= (p.reorder_level || 5));
+    const low_stock = products.filter(p => p.stock_quantity > 0 && p.stock_quantity <= (p.reorder_level || 5));
     const out_of_stock = products.filter(p => p.stock_quantity <= 0 || p.status === 'sold_out');
     res.json({ products, low_stock, out_of_stock });
   } catch (err) {

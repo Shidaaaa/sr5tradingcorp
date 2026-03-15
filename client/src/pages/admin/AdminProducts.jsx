@@ -28,6 +28,8 @@ export default function AdminProducts() {
   const [sortDir, setSortDir] = useState('asc');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [stockModalProduct, setStockModalProduct] = useState(null);
+  const [stockAddQty, setStockAddQty] = useState(1);
 
   const handleSort = (field) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -95,6 +97,31 @@ export default function AdminProducts() {
       toast.success(`Restocked! New quantity: ${data.new_quantity}`);
       fetchAll();
     } catch (err) { toast.error(err.message); }
+  };
+
+  const openStockModal = (product) => {
+    setStockModalProduct(product);
+    setStockAddQty(Number(product.reorder_level || 1));
+  };
+
+  const handleAddStock = async () => {
+    if (!stockModalProduct) return;
+    const qty = Number(stockAddQty);
+    if (!qty || qty <= 0) {
+      toast.error('Please enter a valid quantity to add.');
+      return;
+    }
+
+    try {
+      const newStock = Number(stockModalProduct.stock_quantity || 0) + qty;
+      await api.updateProduct(stockModalProduct.id, { stock_quantity: newStock });
+      toast.success(`Stock updated: ${newStock}`);
+      setStockModalProduct(null);
+      setStockAddQty(1);
+      fetchAll();
+    } catch (err) {
+      toast.error(err.message || 'Failed to add stock.');
+    }
   };
 
   const handleCreateCategory = async (e) => {
@@ -254,6 +281,7 @@ export default function AdminProducts() {
                   <td className="px-4 py-3">{statusBadge(p.status)}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
+                      <button onClick={() => openStockModal(p)} className="p-1.5 hover:bg-green-50 text-green-700 rounded" title="Add Stock"><FiPlus size={14} /></button>
                       <button onClick={() => handleEdit(p)} className="p-1.5 hover:bg-gray-100 rounded" title="Edit"><FiEdit2 size={14} /></button>
                       {p.type !== 'vehicle' && <button onClick={() => handleReorder(p)} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded" title="Reorder"><FiRefreshCw size={14} /></button>}
                     </div>
@@ -265,6 +293,26 @@ export default function AdminProducts() {
         </div>
         <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} totalItems={processed.length} itemsPerPage={itemsPerPage} onItemsPerPageChange={v => { setItemsPerPage(v); setCurrentPage(1); }} />
       </div>
+
+      {stockModalProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setStockModalProduct(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-xl p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-bold">Add Stock</h3>
+            <p className="text-sm text-gray-500 mt-1">{stockModalProduct.name}</p>
+            <div className="mt-4 space-y-3">
+              <p className="text-sm text-gray-600">Current: <span className="font-semibold text-navy-900">{stockModalProduct.stock_quantity}</span></p>
+              <div>
+                <label className="block text-sm font-medium mb-1">Quantity to add</label>
+                <input type="number" min="1" value={stockAddQty} onChange={e => setStockAddQty(e.target.value)} className="input-field" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button type="button" onClick={() => setStockModalProduct(null)} className="btn-secondary flex-1">Cancel</button>
+              <button type="button" onClick={handleAddStock} className="btn-primary flex-1">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
