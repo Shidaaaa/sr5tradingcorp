@@ -31,7 +31,17 @@ export default function ProductDetail() {
     catch (err) { toast.error(err.message); }
   };
 
+  const handleInquire = () => {
+    if (!user) { toast.error('Please login first'); navigate('/login'); return; }
+    navigate(`/checkout?inquire_product_id=${product.id}&quantity=1`);
+  };
+
   const specs = product?.specifications ? JSON.parse(product.specifications) : {};
+  const canAddToCart = product?.type === 'vehicle'
+    ? Number(product?.stock_quantity || 0) > 0
+    : product?.status === 'available' && Number(product?.stock_quantity || 0) > 0;
+  const isOutOfStock = Number(product?.stock_quantity || 0) <= 0 || product?.status === 'sold_out';
+  const availabilityLabel = isOutOfStock ? 'sold_out' : (product?.type === 'vehicle' ? 'available' : product?.status);
 
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-navy-900"></div></div>;
   if (!product) return null;
@@ -57,7 +67,7 @@ export default function ProductDetail() {
                 <FiTag size={80} className="mx-auto mb-2" />
                 <span className="text-sm">No image available</span>
               </div>
-              {product.status === 'sold_out' && (
+              {isOutOfStock && (
                 <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
                   <span className="bg-red-600 text-white text-lg font-bold px-6 py-2 rounded-full">SOLD OUT</span>
                 </div>
@@ -71,17 +81,15 @@ export default function ProductDetail() {
             <div className="flex flex-wrap items-center gap-2">
               {product.category_name && <span className="badge badge-info">{product.category_name}</span>}
               {product.type === 'vehicle' && <span className="badge badge-purple">Vehicle</span>}
-              {product.status === 'available' && <span className="badge badge-success">Available</span>}
-              {product.status === 'sold_out' && <span className="badge badge-danger">Sold Out</span>}
-              {product.status === 'reserved' && <span className="badge badge-warning">Reserved</span>}
+              {availabilityLabel === 'available' && <span className="badge badge-success">Available</span>}
+              {availabilityLabel === 'sold_out' && <span className="badge badge-danger">Sold Out</span>}
+              {availabilityLabel === 'reserved' && <span className="badge badge-warning">Reserved</span>}
             </div>
 
             {/* Price */}
             <div className="bg-gray-50 rounded-xl p-5 border border-gray-200">
               <p className="text-4xl font-bold text-navy-900">{formatPrice(product.price)}</p>
-              {product.type !== 'vehicle' && product.status === 'available' && (
-                <p className="text-sm text-gray-500 mt-1">{product.stock_quantity} in stock</p>
-              )}
+              <p className="text-sm text-gray-500 mt-1">{product.stock_quantity} in stock</p>
             </div>
 
             {/* Description */}
@@ -141,7 +149,7 @@ export default function ProductDetail() {
 
             {/* Actions */}
             <div className="space-y-3 pt-4 border-t border-gray-200">
-              {product.status === 'available' && (
+              {canAddToCart && (
                 <>
                   {product.type !== 'vehicle' && (
                     <div className="flex items-center gap-4">
@@ -153,9 +161,15 @@ export default function ProductDetail() {
                       </div>
                     </div>
                   )}
-                  <button onClick={handleAddToCart} className="w-full bg-navy-900 text-white py-3.5 rounded-xl font-semibold hover:bg-navy-800 transition-colors flex items-center justify-center gap-2 text-lg">
-                    <FiShoppingCart /> Add to Cart
-                  </button>
+                  {product.type === 'vehicle' ? (
+                    <button onClick={handleInquire} className="w-full bg-navy-900 text-white py-3.5 rounded-xl font-semibold hover:bg-navy-800 transition-colors flex items-center justify-center gap-2 text-lg">
+                      <FiShoppingCart /> Inquire
+                    </button>
+                  ) : (
+                    <button onClick={handleAddToCart} className="w-full bg-navy-900 text-white py-3.5 rounded-xl font-semibold hover:bg-navy-800 transition-colors flex items-center justify-center gap-2 text-lg">
+                      <FiShoppingCart /> Add to Cart
+                    </button>
+                  )}
                 </>
               )}
 
@@ -165,7 +179,7 @@ export default function ProductDetail() {
                 </Link>
               )}
 
-              {product.status === 'sold_out' && (
+              {isOutOfStock && (
                 <div className="bg-red-50 text-red-700 rounded-xl p-4 text-center font-medium border border-red-200">
                   This item is currently sold out
                 </div>

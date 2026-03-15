@@ -69,6 +69,7 @@ export const api = {
   // Orders
   getOrders: () => apiRequest('/orders'),
   getOrder: (id) => apiRequest(`/orders/${id}`),
+  placeDirectOrder: (data) => apiRequest('/orders/direct', { method: 'POST', body: JSON.stringify(data) }),
   placeOrder: (data) => apiRequest('/orders', { method: 'POST', body: JSON.stringify(data) }),
   updateOrderStatus: (id, data) => apiRequest(`/orders/${id}/status`, { method: 'PUT', body: JSON.stringify(data) }),
 

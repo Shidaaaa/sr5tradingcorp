@@ -114,10 +114,18 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
       await InventoryLog.create({ product_id: product._id, change_type: change > 0 ? 'restock' : 'adjustment', quantity_change: change, previous_quantity: product.stock_quantity, new_quantity: stock_quantity, notes: 'Manual adjustment', created_by: req.user.id });
     }
 
-    let newStatus = status || product.status;
+    const resolvedType = type !== undefined ? type : product.type;
+    let newStatus = status !== undefined ? status : product.status;
     if (stock_quantity !== undefined) {
-      if (stock_quantity <= 0 && product.type !== 'vehicle') newStatus = 'sold_out';
-      else if (stock_quantity > 0 && product.status === 'sold_out') newStatus = 'available';
+      if (stock_quantity <= 0) {
+        newStatus = 'sold_out';
+      } else if (status === undefined) {
+        if (resolvedType === 'vehicle') {
+          newStatus = 'available';
+        } else if (product.status === 'sold_out') {
+          newStatus = 'available';
+        }
+      }
     }
 
     const updates = {};
@@ -154,7 +162,7 @@ router.post('/:id/reorder', authenticateToken, requireAdmin, async (req, res) =>
     await InventoryLog.create({ product_id: product._id, change_type: 'restock', quantity_change: quantity || 10, previous_quantity: product.stock_quantity, new_quantity: newQty, notes: 'Reorder restock', created_by: req.user.id });
 
     product.stock_quantity = newQty;
-    if (product.status === 'sold_out') product.status = 'available';
+    if (product.stock_quantity > 0) product.status = 'available';
     await product.save();
 
     res.json({ ...product.toObject(), id: product._id, new_quantity: product.stock_quantity });

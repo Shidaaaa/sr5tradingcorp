@@ -42,21 +42,23 @@ function getItemReservationExpiry(productType) {
   return now;
 }
 
+function isProductPurchasable(product) {
+  const stock = Number(product?.stock_quantity || 0);
+  if (product?.type === 'vehicle') {
+    return stock > 0;
+  }
+  return product?.status === 'available' && stock > 0;
+}
+
 async function releaseOrderInventory(orderId, userId) {
   const items = await OrderItem.find({ order_id: orderId }).lean();
   for (const item of items) {
     const product = await Product.findById(item.product_id);
     if (!product) continue;
 
-    if (product.type === 'vehicle') {
-      product.status = 'available';
-      await product.save();
-      continue;
-    }
-
-    const prevQty = product.stock_quantity || 0;
+    const prevQty = Number(product.stock_quantity || 0);
     product.stock_quantity = prevQty + (item.quantity || 0);
-    if (product.stock_quantity > 0 && product.status === 'sold_out') {
+    if (product.stock_quantity > 0 && (product.status === 'sold_out' || product.status === 'reserved')) {
       product.status = 'available';
     }
     await product.save();
@@ -188,6 +190,73 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Create order directly from a product inquiry (without cart)
+router.post('/direct', authenticateToken, async (req, res) => {
+  try {
+    const { product_id, quantity, delivery_method, delivery_address, notes } = req.body;
+    if (!product_id) return res.status(400).json({ error: 'Product ID is required.' });
+
+    const orderQty = Math.max(1, Number(quantity || 1));
+    const product = await Product.findById(product_id);
+    if (!product) return res.status(404).json({ error: 'Product not found.' });
+    if (!isProductPurchasable(product)) return res.status(400).json({ error: `${product.name} is no longer available.` });
+    if (Number(product.stock_quantity || 0) < orderQty) {
+      return res.status(400).json({ error: `Insufficient stock for ${product.name}.` });
+    }
+
+    const total = Number(product.price || 0) * orderQty;
+    const hasVehicle = product.type === 'vehicle';
+    const reservationFeeTotal = hasVehicle ? calculateReservationFee(product) * orderQty : 0;
+    const reservationExpiresAt = getItemReservationExpiry(hasVehicle ? 'vehicle' : 'general');
+
+    const order = await Order.create({
+      user_id: req.user.id,
+      order_number: generateOrderNumber(),
+      total_amount: total,
+      status: 'pending',
+      has_vehicle: hasVehicle,
+      reservation_fee_total: reservationFeeTotal,
+      reservation_fee_paid: reservationFeeTotal <= 0,
+      reservation_expires_at: reservationExpiresAt,
+      delivery_method: delivery_method || 'pickup',
+      delivery_address: delivery_address || null,
+      notes: notes || null,
+    });
+
+    await OrderItem.create({
+      order_id: order._id,
+      product_id: product._id,
+      quantity: orderQty,
+      unit_price: product.price,
+      subtotal: total,
+      reservation_expires_at: getItemReservationExpiry(product.type),
+    });
+
+    const prevQty = Number(product.stock_quantity || 0);
+    product.stock_quantity = Math.max(0, prevQty - orderQty);
+    if (product.stock_quantity <= 0) {
+      product.status = 'sold_out';
+    } else if (product.status === 'sold_out' || product.status === 'reserved') {
+      product.status = 'available';
+    }
+    await product.save();
+
+    await InventoryLog.create({
+      product_id: product._id,
+      change_type: 'sale',
+      quantity_change: -orderQty,
+      previous_quantity: prevQty,
+      new_quantity: product.stock_quantity,
+      notes: `Direct inquiry checkout ${order.order_number}`,
+      created_by: req.user.id,
+    });
+
+    res.status(201).json({ ...order.toObject(), id: order._id });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error creating direct order.' });
+  }
+});
+
 // Create order from cart
 router.post('/', authenticateToken, async (req, res) => {
   try {
@@ -196,11 +265,11 @@ router.post('/', authenticateToken, async (req, res) => {
     const cartItems = await CartItem.find({ user_id: req.user.id }).populate('product_id').lean();
     if (!cartItems.length) return res.status(400).json({ error: 'Cart is empty.' });
 
-    // Validate stock
+    // Validate availability and stock
     for (const item of cartItems) {
       if (!item.product_id) return res.status(400).json({ error: 'A product in your cart no longer exists.' });
-      if (item.product_id.status !== 'available') return res.status(400).json({ error: `${item.product_id.name} is no longer available.` });
-      if (item.product_id.type !== 'vehicle' && item.product_id.stock_quantity < item.quantity) {
+      if (!isProductPurchasable(item.product_id)) return res.status(400).json({ error: `${item.product_id.name} is no longer available.` });
+      if (item.product_id.stock_quantity < item.quantity) {
         return res.status(400).json({ error: `Insufficient stock for ${item.product_id.name}.` });
       }
     }
@@ -241,20 +310,27 @@ router.post('/', authenticateToken, async (req, res) => {
         reservation_expires_at: getItemReservationExpiry(item.product_id.type),
       });
 
-      // Reserve vehicles immediately so they are not sold to another customer.
-      if (item.product_id.type === 'vehicle') {
-        await Product.findByIdAndUpdate(item.product_id._id, { status: 'reserved' });
-      }
+      const product = await Product.findById(item.product_id._id);
+      if (!product) continue;
 
-      // Decrement stock for non-vehicle items
-      if (item.product_id.type !== 'vehicle') {
-        const product = await Product.findById(item.product_id._id);
-        const prevQty = product.stock_quantity;
-        product.stock_quantity = Math.max(0, product.stock_quantity - item.quantity);
-        if (product.stock_quantity <= 0) product.status = 'sold_out';
-        await product.save();
-        await InventoryLog.create({ product_id: product._id, change_type: 'sale', quantity_change: -item.quantity, previous_quantity: prevQty, new_quantity: product.stock_quantity, notes: `Order ${order.order_number}`, created_by: req.user.id });
+      const prevQty = Number(product.stock_quantity || 0);
+      product.stock_quantity = Math.max(0, prevQty - item.quantity);
+      if (product.stock_quantity <= 0) {
+        product.status = 'sold_out';
+      } else if (product.status === 'sold_out' || product.status === 'reserved') {
+        product.status = 'available';
       }
+      await product.save();
+
+      await InventoryLog.create({
+        product_id: product._id,
+        change_type: 'sale',
+        quantity_change: -item.quantity,
+        previous_quantity: prevQty,
+        new_quantity: product.stock_quantity,
+        notes: `Order ${order.order_number}`,
+        created_by: req.user.id,
+      });
     }
 
     // Clear cart

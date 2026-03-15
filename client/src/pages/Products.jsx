@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { FiSearch, FiShoppingCart, FiMapPin, FiTag, FiFilter, FiGrid, FiList, FiChevronDown } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
@@ -21,6 +21,7 @@ export default function Products({ filterType, browseCategory }) {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { addToCart } = useCart();
   const [showFilters, setShowFilters] = useState(false);
@@ -74,7 +75,27 @@ export default function Products({ filterType, browseCategory }) {
     try { await addToCart(productId); toast.success('Added to cart!'); } catch (err) { toast.error(err.message); }
   };
 
+  const handleInquire = (e, product) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!user) {
+      toast.error('Please login to continue inquiry');
+      navigate('/login');
+      return;
+    }
+    navigate(`/checkout?inquire_product_id=${product.id}&quantity=1`);
+  };
+
   const sortLabels = { '': 'Most Relevant', price_asc: 'Price: Low to High', price_desc: 'Price: High to Low', name: 'Name A-Z' };
+
+  const canAddToCart = (product) => {
+    if (product.type === 'vehicle') {
+      return Number(product.stock_quantity || 0) > 0;
+    }
+    return product.status === 'available' && Number(product.stock_quantity || 0) > 0;
+  };
+
+  const isOutOfStock = (product) => Number(product.stock_quantity || 0) <= 0 || product.status === 'sold_out';
 
   return (
     <div>
@@ -173,7 +194,7 @@ export default function Products({ filterType, browseCategory }) {
                       </div>
                     </div>
                     {/* Status overlay */}
-                    {product.status === 'sold_out' && (
+                    {isOutOfStock(product) && (
                       <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
                         <span className="bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-full">SOLD OUT</span>
                       </div>
@@ -193,12 +214,12 @@ export default function Products({ filterType, browseCategory }) {
                       )}
                     </div>
 
-                    {product.status === 'available' && (
+                    {canAddToCart(product) && (
                       <button
-                        onClick={(e) => handleAddToCart(e, product.id)}
+                        onClick={(e) => product.type === 'vehicle' ? handleInquire(e, product) : handleAddToCart(e, product.id)}
                         className="w-full mt-3 py-2 bg-navy-900 text-white text-sm font-medium rounded-lg hover:bg-navy-800 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100"
                       >
-                        <FiShoppingCart size={14} /> Add to Cart
+                        <FiShoppingCart size={14} /> {product.type === 'vehicle' ? 'Inquire' : 'Add to Cart'}
                       </button>
                     )}
                   </div>

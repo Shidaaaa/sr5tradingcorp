@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
@@ -18,7 +18,10 @@ export default function Checkout() {
   const { cart, fetchCart } = useCart();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
+  const [inquiryItem, setInquiryItem] = useState(null);
+  const [inquiryLoading, setInquiryLoading] = useState(false);
   const [form, setForm] = useState({
     delivery_method: 'pickup',
     delivery_address: user?.address || '',
@@ -26,9 +29,58 @@ export default function Checkout() {
     notes: '',
   });
 
-  const vehicleItems = cart.items.filter(item => item.type === 'vehicle');
+  const inquiryProductId = searchParams.get('inquire_product_id');
+  const inquiryQty = Math.max(1, Number(searchParams.get('quantity') || 1));
+  const checkoutItems = inquiryItem ? [{ ...inquiryItem, quantity: inquiryQty }] : cart.items;
+  const checkoutTotal = checkoutItems.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 0)), 0);
+
+  const vehicleItems = checkoutItems.filter(item => item.type === 'vehicle');
   const hasVehicleOrder = vehicleItems.length > 0;
   const reservationFeeTotal = vehicleItems.reduce((sum, item) => sum + (calculateVehicleReservationFee(item) * (item.quantity || 1)), 0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadInquiryItem = async () => {
+      if (!inquiryProductId) {
+        setInquiryItem(null);
+        return;
+      }
+
+      try {
+        setInquiryLoading(true);
+        const product = await api.getProduct(inquiryProductId);
+        if (cancelled) return;
+
+        if (!product || Number(product.stock_quantity || 0) <= 0 || product.status === 'sold_out') {
+          toast.error('Selected product is no longer available for inquiry checkout.');
+          navigate('/products');
+          return;
+        }
+
+        setInquiryItem({
+          id: product.id,
+          product_id: product.id,
+          name: product.name,
+          price: Number(product.price || 0),
+          quantity: inquiryQty,
+          stock_quantity: Number(product.stock_quantity || 0),
+          type: product.type,
+          status: product.status,
+        });
+      } catch (err) {
+        if (!cancelled) {
+          toast.error('Unable to load inquiry product.');
+          navigate('/products');
+        }
+      } finally {
+        if (!cancelled) setInquiryLoading(false);
+      }
+    };
+
+    loadInquiryItem();
+    return () => { cancelled = true; };
+  }, [inquiryProductId, inquiryQty, navigate]);
 
   useEffect(() => {
     if (hasVehicleOrder && !['credit_card', 'debit_card'].includes(form.payment_method)) {
@@ -38,8 +90,11 @@ export default function Checkout() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (cart.items.length === 0) { toast.error('Cart is empty'); return; }
-    if (!Number.isFinite(cart.total) || cart.total <= 0) {
+    if (checkoutItems.length === 0) {
+      toast.error(inquiryProductId ? 'Inquiry item is missing.' : 'Cart is empty');
+      return;
+    }
+    if (!Number.isFinite(checkoutTotal) || checkoutTotal <= 0) {
       toast.error('Order total must be greater than zero. Please review your cart items.');
       return;
     }
@@ -47,9 +102,11 @@ export default function Checkout() {
     let orderId = null;
     setLoading(true);
     try {
-      const data = await api.placeOrder(form);
+      const data = inquiryItem
+        ? await api.placeDirectOrder({ ...form, product_id: inquiryItem.product_id, quantity: inquiryQty })
+        : await api.placeOrder(form);
       orderId = data.id || data._id;
-      await fetchCart();
+      if (!inquiryItem) await fetchCart();
 
       // Vehicle orders require reservation fee payment online.
       if (data.has_vehicle && data.reservation_fee_total > 0) {
@@ -160,8 +217,13 @@ export default function Checkout() {
         <div>
           <div className="card p-6 sticky top-20">
             <h3 className="font-bold text-lg mb-4">Order Summary</h3>
+            {inquiryItem && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700 mb-4">
+                Inquiry checkout mode: this order is placed directly from product inquiry, not from cart.
+              </div>
+            )}
             <div className="space-y-3 mb-4">
-              {cart.items.map(item => (
+              {checkoutItems.map(item => (
                 <div key={item.id} className="flex justify-between text-sm">
                   <span className="text-gray-600 line-clamp-1 flex-1 mr-2">{item.name} × {item.quantity}</span>
                   <span className="font-medium whitespace-nowrap">{formatPrice(item.price * item.quantity)}</span>
@@ -173,7 +235,7 @@ export default function Checkout() {
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Order Total</span>
-                  <span className="font-medium">{formatPrice(cart.total)}</span>
+                  <span className="font-medium">{formatPrice(checkoutTotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Reservation Fee (5%)</span>
@@ -187,12 +249,14 @@ export default function Checkout() {
             ) : (
               <div className="flex justify-between font-bold text-lg">
                 <span>Total</span>
-                <span className="text-accent-600">{formatPrice(cart.total)}</span>
+                <span className="text-accent-600">{formatPrice(checkoutTotal)}</span>
               </div>
             )}
-            <button type="submit" disabled={loading || cart.items.length === 0 || !Number.isFinite(cart.total) || cart.total <= 0} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
+            <button type="submit" disabled={loading || inquiryLoading || checkoutItems.length === 0 || !Number.isFinite(checkoutTotal) || checkoutTotal <= 0} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
               {loading
                 ? 'Processing...'
+                : inquiryLoading
+                  ? 'Loading inquiry...'
                 : hasVehicleOrder
                   ? <><FiCreditCard /> Pay Reservation Fee Online</>
                   : (form.payment_method === 'credit_card' || form.payment_method === 'debit_card')

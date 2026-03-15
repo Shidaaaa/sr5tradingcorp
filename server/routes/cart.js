@@ -5,6 +5,14 @@ const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
+function isProductPurchasable(product) {
+  const stock = Number(product?.stock_quantity || 0);
+  if (product?.type === 'vehicle') {
+    return stock > 0;
+  }
+  return product?.status === 'available' && stock > 0;
+}
+
 // Get user's cart
 router.get('/', authenticateToken, async (req, res) => {
   try {
@@ -37,8 +45,8 @@ router.post('/', authenticateToken, async (req, res) => {
 
     const product = await Product.findById(product_id);
     if (!product) return res.status(404).json({ error: 'Product not found.' });
-    if (product.status !== 'available') return res.status(400).json({ error: 'Product is not available.' });
-    if (product.type !== 'vehicle' && product.stock_quantity < (quantity || 1)) {
+    if (!isProductPurchasable(product)) return res.status(400).json({ error: 'Product is not available.' });
+    if (product.stock_quantity < (quantity || 1)) {
       return res.status(400).json({ error: 'Insufficient stock.' });
     }
 
