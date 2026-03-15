@@ -33,6 +33,8 @@ export default function PaymentSuccess() {
         ? await api.verifyStripeReservationPayment({ session_id: sessionId })
         : type === 'order_reservation'
           ? await api.verifyStripeOrderReservationPayment({ session_id: sessionId })
+          : type === 'installment'
+            ? await api.verifyStripeInstallmentPayment({ session_id: sessionId })
           : await api.verifyStripePayment({ session_id: sessionId });
       setPayment(data);
     } catch (err) {
@@ -71,6 +73,8 @@ export default function PaymentSuccess() {
             ? 'Reservation Fee Paid!'
             : searchParams.get('type') === 'order_reservation'
               ? 'Vehicle Reservation Secured!'
+              : searchParams.get('type') === 'installment'
+                ? 'Installment Paid Successfully!'
               : 'Payment Successful!'}
         </h1>
         <p className="text-gray-600 mb-6">
@@ -78,6 +82,8 @@ export default function PaymentSuccess() {
             ? 'Your reservation fee has been received. Your vehicle is now secured!'
             : searchParams.get('type') === 'order_reservation'
               ? 'Your order reservation fee is paid. Your vehicle is now reserved under your order.'
+              : searchParams.get('type') === 'installment'
+                ? `Your monthly installment has been posted${payment?.installment_number ? ` for Month ${payment.installment_number}` : ''}.`
             : 'Your payment has been processed and your order is confirmed.'}
         </p>
 

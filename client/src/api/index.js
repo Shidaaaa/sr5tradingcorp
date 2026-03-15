@@ -12,7 +12,24 @@ async function apiRequest(endpoint, options = {}) {
   };
 
   const response = await fetch(`${API_BASE}${endpoint}`, config);
-  const data = await response.json();
+
+  const contentType = response.headers.get('content-type') || '';
+  const isJson = contentType.includes('application/json');
+  let data;
+
+  if (isJson) {
+    data = await response.json();
+  } else {
+    const rawText = await response.text();
+    const firstLine = (rawText || '').split('\n').map(line => line.trim()).find(Boolean) || '';
+
+    data = {
+      error: firstLine.startsWith('<!DOCTYPE')
+        ? 'Unexpected non-JSON response from server. Please refresh and try again.'
+        : firstLine || 'Unexpected server response format.',
+      raw_response: rawText,
+    };
+  }
 
   if (!response.ok) {
     const error = new Error(data.error || 'Something went wrong');
@@ -74,6 +91,8 @@ export const api = {
   verifyStripeReservationPayment: (data) => apiRequest('/payments/stripe/verify-reservation', { method: 'POST', body: JSON.stringify(data) }),
   createStripeOrderReservationSession: (data) => apiRequest('/payments/stripe/create-order-reservation-session', { method: 'POST', body: JSON.stringify(data) }),
   verifyStripeOrderReservationPayment: (data) => apiRequest('/payments/stripe/verify-order-reservation', { method: 'POST', body: JSON.stringify(data) }),
+  createStripeInstallmentSession: (data) => apiRequest('/payments/stripe/create-installment-session', { method: 'POST', body: JSON.stringify(data) }),
+  verifyStripeInstallmentPayment: (data) => apiRequest('/payments/stripe/verify-installment', { method: 'POST', body: JSON.stringify(data) }),
 
   // Feedback
   getFeedback: () => apiRequest('/feedback'),
@@ -87,6 +106,10 @@ export const api = {
   getStats: () => apiRequest('/admin/stats'),
   getAdminOrders: (status) => apiRequest(`/admin/orders${status ? '?status=' + status : ''}`),
   updateAdminOrderStatus: (id, data) => apiRequest(`/admin/orders/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  setupInstallmentPlan: (orderId, data) => apiRequest(`/admin/orders/${orderId}/setup-installment`, { method: 'POST', body: JSON.stringify(data || {}) }),
+  recordAdminOrderPayment: (orderId, data) => apiRequest(`/admin/orders/${orderId}/record-payment`, { method: 'POST', body: JSON.stringify(data) }),
+  recordInstallmentPayment: (planId, data) => apiRequest(`/admin/installments/${planId}/record-payment`, { method: 'POST', body: JSON.stringify(data) }),
+  getAdminInstallment: (orderId) => apiRequest(`/admin/installments/${orderId}`),
   getAdminBookings: (status) => apiRequest(`/admin/bookings${status ? '?status=' + status : ''}`),
   updateAdminBookingStatus: (id, data) => apiRequest(`/admin/bookings/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   getAdminFeedback: () => apiRequest('/admin/feedback'),
@@ -99,4 +122,29 @@ export const api = {
   getSales: (month, year) => apiRequest(`/admin/sales?month=${month}&year=${year}`),
   getMonthlyReport: (year) => apiRequest(`/admin/reports/monthly${year ? '?year=' + year : ''}`),
   getRevenueReport: () => apiRequest('/admin/reports/revenue'),
+  uploadAdminPaymentReceipt: async (file) => {
+    const token = localStorage.getItem('sr5_token');
+    const form = new FormData();
+    form.append('receipt', file);
+
+    const response = await fetch(`${API_BASE}/admin/payments/upload-receipt`, {
+      method: 'POST',
+      headers: {
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+      body: form,
+    });
+
+    const contentType = response.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const data = isJson ? await response.json() : { error: 'Unexpected server response format.' };
+
+    if (!response.ok) {
+      const error = new Error(data.error || 'Failed to upload receipt.');
+      Object.assign(error, data);
+      throw error;
+    }
+
+    return data;
+  },
 };

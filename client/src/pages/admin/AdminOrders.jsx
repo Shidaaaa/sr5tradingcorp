@@ -20,9 +20,11 @@ const statusConfig = {
   return_requested: { color: 'badge-warning', label: 'Return Req.' },
   returned: { color: 'badge-gray', label: 'Returned' },
   replaced: { color: 'badge-purple', label: 'Replaced' },
+  installment_active: { color: 'badge-info', label: 'Installment Active' },
+  installment_defaulted: { color: 'badge-danger', label: 'Installment Defaulted' },
 };
 
-const statusFlow = ['pending', 'confirmed', 'processing', 'ready', 'picked_up', 'delivered', 'completed', 'cancelled'];
+const statusFlow = ['pending', 'confirmed', 'processing', 'ready', 'picked_up', 'delivered', 'installment_active', 'installment_defaulted', 'completed', 'cancelled'];
 
 export default function AdminOrders() {
   const [orders, setOrders] = useState([]);
@@ -34,6 +36,27 @@ export default function AdminOrders() {
   const [sortDir, setSortDir] = useState('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [showSetupPaymentModal, setShowSetupPaymentModal] = useState(false);
+  const [setupMode, setSetupMode] = useState('full');
+  const [paymentForm, setPaymentForm] = useState({ amount: '', payment_method: 'cash', reference_number: '' });
+  const [installmentPayMethod, setInstallmentPayMethod] = useState('cash');
+  const [installmentReference, setInstallmentReference] = useState('');
+  const [fullPaymentReceiptFile, setFullPaymentReceiptFile] = useState(null);
+  const [installmentReceiptFile, setInstallmentReceiptFile] = useState(null);
+  const [showInstallmentRecordModal, setShowInstallmentRecordModal] = useState(false);
+  const [selectedInstallmentRow, setSelectedInstallmentRow] = useState(null);
+  const [modalInstallmentPayMethod, setModalInstallmentPayMethod] = useState('cash');
+  const [modalInstallmentReference, setModalInstallmentReference] = useState('');
+  const [modalInstallmentReceiptFile, setModalInstallmentReceiptFile] = useState(null);
+  const [recordingInstallment, setRecordingInstallment] = useState(false);
+
+  const uploadReceiptBeforeRecord = async (file) => {
+    if (!file) {
+      throw new Error('Please upload receipt proof before recording payment.');
+    }
+    const uploaded = await api.uploadAdminPaymentReceipt(file);
+    return uploaded.receipt_image_url;
+  };
 
   const handleSort = (field) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -47,13 +70,128 @@ export default function AdminOrders() {
     try { setOrders(await api.getAdminOrders()); } catch {} finally { setLoading(false); }
   };
 
+  const refreshSelected = async (orderId = selected?.id) => {
+    if (!orderId) return;
+    const fresh = await api.getAdminOrders();
+    setOrders(fresh);
+    const found = fresh.find(o => o.id === orderId);
+    setSelected(found || null);
+  };
+
   const updateStatus = async (orderId, status) => {
     try {
       await api.updateAdminOrderStatus(orderId, { status });
       toast.success(`Order ${status}`);
-      fetchOrders();
+      await refreshSelected(orderId);
       setSelected(null);
     } catch (err) { toast.error(err.message); }
+  };
+
+  const openSetupPayment = () => {
+    if (!selected) return;
+    setPaymentForm({
+      amount: selected.remaining_balance || 0,
+      payment_method: 'cash',
+      reference_number: '',
+    });
+    setSetupMode('full');
+    setFullPaymentReceiptFile(null);
+    setShowSetupPaymentModal(true);
+  };
+
+  const handleRecordFullPayment = async (e) => {
+    e.preventDefault();
+    if (!selected) return;
+    try {
+      const receiptImageUrl = await uploadReceiptBeforeRecord(fullPaymentReceiptFile);
+      await api.recordAdminOrderPayment(selected.id, {
+        payment_type: 'full',
+        amount: Number(paymentForm.amount),
+        payment_method: paymentForm.payment_method,
+        reference_number: paymentForm.reference_number || null,
+        receipt_image_url: receiptImageUrl,
+      });
+      toast.success('Full payment recorded.');
+      setShowSetupPaymentModal(false);
+      setFullPaymentReceiptFile(null);
+      await refreshSelected(selected.id);
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
+  const handleCreateInstallment = async () => {
+    if (!selected) return;
+    try {
+      await api.setupInstallmentPlan(selected.id, {});
+      toast.success('Installment plan created. Record down payment to activate monthly schedule.');
+      setShowSetupPaymentModal(false);
+      await refreshSelected(selected.id);
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
+  const handleRecordDownPayment = async () => {
+    if (!selected?.installment_plan) return;
+    try {
+      const receiptImageUrl = await uploadReceiptBeforeRecord(installmentReceiptFile);
+      await api.recordAdminOrderPayment(selected.id, {
+        payment_type: 'down_payment',
+        amount: Number(selected.installment_plan.down_payment_amount),
+        payment_method: installmentPayMethod,
+        reference_number: installmentReference || null,
+        receipt_image_url: receiptImageUrl,
+      });
+      toast.success('Down payment recorded.');
+      setInstallmentReference('');
+      setInstallmentReceiptFile(null);
+      await refreshSelected(selected.id);
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
+  const openInstallmentRecordModal = (row) => {
+    if (!row) return;
+    setSelectedInstallmentRow(row);
+    setModalInstallmentPayMethod(installmentPayMethod || 'cash');
+    setModalInstallmentReference('');
+    setModalInstallmentReceiptFile(null);
+    setShowInstallmentRecordModal(true);
+  };
+
+  const handleRecordInstallment = async () => {
+    if (!selected?.installment_plan || !selectedInstallmentRow) return;
+    try {
+      setRecordingInstallment(true);
+      const receiptImageUrl = await uploadReceiptBeforeRecord(modalInstallmentReceiptFile);
+      const dueLeft = Number((selectedInstallmentRow.amount_due || 0) - (selectedInstallmentRow.amount_paid || 0));
+      if (dueLeft <= 0) {
+        toast.error('This row has no remaining due amount.');
+        setRecordingInstallment(false);
+        return;
+      }
+      await api.recordInstallmentPayment(selected.installment_plan.id, {
+        installment_number: selectedInstallmentRow.installment_number,
+        amount: dueLeft,
+        payment_method: modalInstallmentPayMethod,
+        reference_number: modalInstallmentReference || null,
+        receipt_image_url: receiptImageUrl,
+      });
+      toast.success(`Installment ${selectedInstallmentRow.installment_number} payment recorded.`);
+      setInstallmentReference('');
+      setInstallmentReceiptFile(null);
+      setShowInstallmentRecordModal(false);
+      setSelectedInstallmentRow(null);
+      setModalInstallmentReference('');
+      setModalInstallmentReceiptFile(null);
+      await refreshSelected(selected.id);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setRecordingInstallment(false);
+    }
   };
 
   const processed = useMemo(() => {
@@ -169,6 +307,88 @@ export default function AdminOrders() {
                 ))}
               </div>
             )}
+
+            {selected.has_vehicle && selected.reservation_fee_paid && selected.remaining_balance > 0 && !selected.installment_plan && (
+              <div className="rounded-lg border border-accent-200 bg-accent-50 p-3 text-sm">
+                <p className="font-medium text-accent-800">Reservation is paid. Settle payment at store.</p>
+                <p className="text-accent-700 mt-1">Choose full settlement or create an installment plan.</p>
+                <button onClick={openSetupPayment} className="btn-primary btn-sm mt-2">Setup Payment</button>
+              </div>
+            )}
+
+            {selected.installment_plan && (
+              <div className="space-y-3">
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
+                  <p><strong>Installment Status:</strong> <span className="capitalize">{selected.installment_plan.status}</span></p>
+                  <p><strong>Down Payment:</strong> {formatPrice(selected.installment_plan.down_payment_amount)}</p>
+                  <p><strong>Monthly Amount:</strong> {formatPrice(selected.installment_plan.monthly_amount)} × {selected.installment_plan.number_of_installments}</p>
+                  <p><strong>Total with Interest:</strong> {formatPrice(selected.installment_plan.total_with_interest)}</p>
+                </div>
+
+                {!selected.installment_plan.down_payment_paid && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm space-y-2">
+                    <p className="font-medium text-amber-800">Record Down Payment</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <select value={installmentPayMethod} onChange={e => setInstallmentPayMethod(e.target.value)} className="input-field">
+                        <option value="cash">Cash</option>
+                        <option value="bank_transfer">Bank Transfer</option>
+                        <option value="credit_card">Credit Card</option>
+                        <option value="debit_card">Debit Card</option>
+                      </select>
+                      <input value={installmentReference} onChange={e => setInstallmentReference(e.target.value)} className="input-field" placeholder="Reference # (optional)" />
+                      <button onClick={handleRecordDownPayment} className="btn-primary btn-sm">Record {formatPrice(selected.installment_plan.down_payment_amount)}</button>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-amber-900 mb-1">Upload Receipt Proof (required)</label>
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf"
+                        onChange={e => setInstallmentReceiptFile(e.target.files?.[0] || null)}
+                        className="input-field"
+                      />
+                      {installmentReceiptFile && <p className="text-xs text-amber-800 mt-1">Selected: {installmentReceiptFile.name}</p>}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <h4 className="font-medium mb-2">Installment Tracker</h4>
+                  <div className="space-y-1">
+                    {selected.installment_plan.schedule?.map(row => {
+                      const badge = row.status === 'paid'
+                        ? 'bg-green-100 text-green-700'
+                        : row.status === 'overdue'
+                          ? 'bg-red-100 text-red-700'
+                          : row.status === 'partially_paid'
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-gray-100 text-gray-700';
+                      const statusLabel = row.status === 'paid'
+                        ? 'Paid'
+                        : row.status === 'overdue'
+                          ? 'Overdue'
+                          : row.status === 'partially_paid'
+                            ? 'Partially Paid'
+                            : 'Pending';
+
+                      return (
+                        <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 p-2 bg-gray-50 rounded text-sm">
+                          <div>
+                            <p className="font-medium">Month {row.installment_number} • Due {new Date(row.due_date).toLocaleDateString()}</p>
+                            <p className="text-gray-600">Due: {formatPrice(row.amount_due)} • Paid: {formatPrice(row.amount_paid || 0)}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${badge}`}>{statusLabel}</span>
+                            {row.status !== 'paid' && selected.installment_plan.down_payment_paid && (
+                              <button onClick={() => openInstallmentRecordModal(row)} className="btn-primary btn-sm">Record Payment</button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
             <div>
               <h4 className="font-medium mb-2">Update Status:</h4>
               <div className="flex flex-wrap gap-2">
@@ -178,6 +398,132 @@ export default function AdminOrders() {
               </div>
             </div>
             <button onClick={() => setSelected(null)} className="btn-secondary w-full">Close</button>
+          </div>
+        </div>
+      )}
+
+      {showInstallmentRecordModal && selectedInstallmentRow && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50" onClick={() => setShowInstallmentRecordModal(false)}>
+          <div onClick={e => e.stopPropagation()} className="bg-white rounded-xl p-6 w-full max-w-md mx-4 space-y-4">
+            <h3 className="text-lg font-bold">Record Installment Payment</h3>
+            <p className="text-sm text-gray-600">
+              Month {selectedInstallmentRow.installment_number} • Due {new Date(selectedInstallmentRow.due_date).toLocaleDateString()}
+            </p>
+            <p className="text-sm font-medium text-gray-700">
+              Amount to record: {formatPrice(Number((selectedInstallmentRow.amount_due || 0) - (selectedInstallmentRow.amount_paid || 0)))}
+            </p>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Payment Method</label>
+              <select value={modalInstallmentPayMethod} onChange={e => setModalInstallmentPayMethod(e.target.value)} className="input-field">
+                <option value="cash">Cash</option>
+                <option value="bank_transfer">Bank Transfer</option>
+                <option value="credit_card">Credit Card</option>
+                <option value="debit_card">Debit Card</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Reference # (optional for cash)</label>
+              <input value={modalInstallmentReference} onChange={e => setModalInstallmentReference(e.target.value)} className="input-field" />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Upload Receipt Proof (required)</label>
+              <input
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={e => setModalInstallmentReceiptFile(e.target.files?.[0] || null)}
+                className="input-field"
+              />
+              {modalInstallmentReceiptFile && <p className="text-xs text-gray-600 mt-1">Selected: {modalInstallmentReceiptFile.name}</p>}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowInstallmentRecordModal(false);
+                  setSelectedInstallmentRow(null);
+                  setModalInstallmentReference('');
+                  setModalInstallmentReceiptFile(null);
+                }}
+                className="btn-secondary flex-1"
+                disabled={recordingInstallment}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRecordInstallment}
+                className="btn-primary flex-1"
+                disabled={recordingInstallment}
+              >
+                {recordingInstallment ? 'Recording...' : 'Confirm Record Payment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSetupPaymentModal && selected && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50" onClick={() => setShowSetupPaymentModal(false)}>
+          <div onClick={e => e.stopPropagation()} className="bg-white rounded-xl p-6 w-full max-w-lg mx-4 space-y-4">
+            <h3 className="text-lg font-bold">Setup Payment • {selected.order_number}</h3>
+            <div className="flex gap-2">
+              <button onClick={() => setSetupMode('full')} className={`btn-sm ${setupMode === 'full' ? 'btn-primary' : 'btn-secondary'}`}>Record Full Payment</button>
+              <button onClick={() => setSetupMode('installment')} className={`btn-sm ${setupMode === 'installment' ? 'btn-primary' : 'btn-secondary'}`}>Setup Installment Plan</button>
+            </div>
+
+            {setupMode === 'full' ? (
+              <form onSubmit={handleRecordFullPayment} className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Amount</label>
+                  <input type="number" step="0.01" value={paymentForm.amount} onChange={e => setPaymentForm(prev => ({ ...prev, amount: e.target.value }))} className="input-field" required />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Payment Method</label>
+                  <select value={paymentForm.payment_method} onChange={e => setPaymentForm(prev => ({ ...prev, payment_method: e.target.value }))} className="input-field">
+                    <option value="cash">Cash</option>
+                    <option value="bank_transfer">Bank Transfer</option>
+                    <option value="credit_card">Credit Card</option>
+                    <option value="debit_card">Debit Card</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Reference # (optional)</label>
+                  <input value={paymentForm.reference_number} onChange={e => setPaymentForm(prev => ({ ...prev, reference_number: e.target.value }))} className="input-field" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Upload Receipt Proof (required)</label>
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={e => setFullPaymentReceiptFile(e.target.files?.[0] || null)}
+                    className="input-field"
+                    required
+                  />
+                  {fullPaymentReceiptFile && <p className="text-xs text-gray-600 mt-1">Selected: {fullPaymentReceiptFile.name}</p>}
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setShowSetupPaymentModal(false)} className="btn-secondary flex-1">Cancel</button>
+                  <button type="submit" className="btn-primary flex-1">Record Payment</button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-3 text-sm">
+                <p>This will create a fixed plan based on the order remaining balance:</p>
+                <ul className="list-disc ml-5 space-y-1">
+                  <li>50% down payment</li>
+                  <li>12 monthly installments</li>
+                  <li>1% monthly interest</li>
+                </ul>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowSetupPaymentModal(false)} className="btn-secondary flex-1">Cancel</button>
+                  <button onClick={handleCreateInstallment} className="btn-primary flex-1">Create Installment Plan</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

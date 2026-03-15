@@ -19,6 +19,8 @@ const statusConfig = {
   return_requested: { color: 'badge-warning', label: 'Return Requested' },
   returned: { color: 'badge-gray', label: 'Returned' },
   replaced: { color: 'badge-purple', label: 'Replaced' },
+  installment_active: { color: 'badge-info', label: 'Installment Active' },
+  installment_defaulted: { color: 'badge-danger', label: 'Installment Defaulted' },
 };
 
 export default function OrderDetail() {
@@ -30,6 +32,7 @@ export default function OrderDetail() {
   const [showPayment, setShowPayment] = useState(false);
   const [showReturn, setShowReturn] = useState(false);
   const [processingReservation, setProcessingReservation] = useState(false);
+  const [processingInstallmentCard, setProcessingInstallmentCard] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount: '', payment_method: 'cash', payment_type: 'full' });
   const [returnForm, setReturnForm] = useState({ order_item_id: '', reason: '', request_type: 'return' });
 
@@ -85,10 +88,34 @@ export default function OrderDetail() {
     }
   };
 
+  const handleInstallmentCardPayment = async () => {
+    try {
+      setProcessingInstallmentCard(true);
+      const session = await api.createStripeInstallmentSession({ order_id: order.id });
+      window.location.href = session.url;
+    } catch (err) {
+      toast.error(err.message || 'Unable to start installment card payment.');
+      setProcessingInstallmentCard(false);
+    }
+  };
+
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500"></div></div>;
   if (!order) return null;
 
   const sc = statusConfig[order.status] || { color: 'badge-gray', label: order.status };
+  const nextInstallmentRow = order.installment_plan?.schedule?.find((row) => row.status !== 'paid') || null;
+  const nextInstallmentAmountDue = nextInstallmentRow
+    ? Math.max(0, Number(nextInstallmentRow.amount_due || 0) - Number(nextInstallmentRow.amount_paid || 0))
+    : 0;
+  const canPayInstallmentByCard = Boolean(
+    order.payment_method === 'installment'
+    && order.installment_plan
+    && order.installment_plan.down_payment_paid
+    && ['active', 'pending', 'defaulted'].includes(order.installment_plan.status)
+    && nextInstallmentRow
+    && nextInstallmentAmountDue > 0
+    && !['cancelled', 'returned', 'replaced', 'completed'].includes(order.status)
+  );
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -126,6 +153,58 @@ export default function OrderDetail() {
                 Reservation expires: <strong>{new Date(order.reservation_expires_at).toLocaleString()}</strong>
               </p>
             )}
+            {order.reservation_fee_paid && !order.payment_method && order.remaining_balance > 0 && (
+              <p className="text-accent-800 mt-2 font-medium">
+                Reservation secured! Please visit SR-5 store to arrange your remaining payment.
+              </p>
+            )}
+          </div>
+        )}
+
+        {order.installment_plan && (
+          <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm">
+            <h3 className="font-bold text-blue-900 mb-2">Installment Plan Summary</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-blue-900">
+              <p><strong>Status:</strong> <span className="capitalize">{order.installment_plan.status}</span></p>
+              <p><strong>Monthly:</strong> {formatPrice(order.installment_plan.monthly_amount)}</p>
+              <p><strong>Interest Rate:</strong> {(order.installment_plan.interest_rate || 0) * 100}%</p>
+              <p><strong>Total with Interest:</strong> {formatPrice(order.installment_plan.total_with_interest)}</p>
+              <p><strong>Paid so far:</strong> {formatPrice(order.installment_plan.paid_schedule_total || 0)}</p>
+              <p><strong>Remaining:</strong> {formatPrice(order.installment_plan.remaining_schedule_total || 0)}</p>
+              {order.installment_plan.next_due_date && <p><strong>Next Due:</strong> {new Date(order.installment_plan.next_due_date).toLocaleDateString()}</p>}
+            </div>
+
+            <div className="mt-3">
+              <h4 className="font-semibold mb-2">Payment Schedule</h4>
+              <div className="space-y-1">
+                {order.installment_plan.schedule?.map(row => {
+                  const statusText = row.status === 'paid'
+                    ? 'Paid'
+                    : row.status === 'overdue'
+                      ? 'Overdue'
+                      : row.status === 'partially_paid'
+                        ? 'Partially Paid'
+                        : 'Pending';
+                  const badge = row.status === 'paid'
+                    ? 'bg-green-100 text-green-700'
+                    : row.status === 'overdue'
+                      ? 'bg-red-100 text-red-700'
+                      : row.status === 'partially_paid'
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-gray-100 text-gray-700';
+
+                  return (
+                    <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 p-2 bg-white rounded border border-blue-100">
+                      <div>
+                        <p className="font-medium text-blue-900">Month {row.installment_number} • Due {new Date(row.due_date).toLocaleDateString()}</p>
+                        <p className="text-blue-800">Due {formatPrice(row.amount_due)} • Paid {formatPrice(row.amount_paid || 0)}</p>
+                      </div>
+                      <span className={`px-2 py-1 rounded text-xs font-medium ${badge}`}>{statusText}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
 
@@ -157,7 +236,11 @@ export default function OrderDetail() {
                   </div>
                   <div className="text-right">
                     <p className="font-bold text-green-700">{formatPrice(p.amount)}</p>
-                    <Link to={`/receipt/${p.receipt_number}`} className="text-accent-600 text-xs flex items-center gap-1"><FiFileText size={12} /> Receipt</Link>
+                    {p.receipt_number ? (
+                      <Link to={`/receipt/${p.receipt_number}`} className="text-accent-600 text-xs flex items-center gap-1"><FiFileText size={12} /> Receipt</Link>
+                    ) : (
+                      <span className="text-xs text-gray-500">No receipt uploaded</span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -172,7 +255,15 @@ export default function OrderDetail() {
               <FiCreditCard size={14} /> {processingReservation ? 'Redirecting...' : `Pay Reservation Fee ${formatPrice(order.reservation_fee_total || 0)}`}
             </button>
           )}
-          {order.remaining_balance > 0 && !['cancelled', 'returned'].includes(order.status) && (!order.has_vehicle || order.reservation_fee_paid) && (
+          {canPayInstallmentByCard && (
+            <button onClick={handleInstallmentCardPayment} disabled={processingInstallmentCard} className="btn-primary btn-sm flex items-center gap-1">
+              <FiCreditCard size={14} />
+              {processingInstallmentCard
+                ? 'Redirecting...'
+                : `Pay Month ${nextInstallmentRow.installment_number} via Card (${formatPrice(nextInstallmentAmountDue)})`}
+            </button>
+          )}
+          {order.remaining_balance > 0 && !['cancelled', 'returned'].includes(order.status) && (!order.has_vehicle || order.reservation_fee_paid) && order.payment_method !== 'installment' && (
             <button onClick={() => setShowPayment(true)} className="btn-primary btn-sm flex items-center gap-1"><FiCreditCard size={14} /> Make Payment</button>
           )}
           {['completed', 'delivered', 'picked_up'].includes(order.status) && (

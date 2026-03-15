@@ -10,11 +10,8 @@ const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency
 
 const calculateVehicleReservationFee = (item) => {
   if (!item || item.type !== 'vehicle') return 0;
-  const rate = item.is_popular ? 0.05 : 0.02;
-  const min = item.is_popular ? 5000 : 2000;
-  const max = item.is_popular ? 50000 : 30000;
-  const fee = Math.round((item.price || 0) * rate);
-  return Math.max(min, Math.min(max, fee));
+  const fee = Math.round((item.price || 0) * 0.05);
+  return Math.max(0, fee);
 };
 
 export default function Checkout() {
@@ -172,10 +169,27 @@ export default function Checkout() {
               ))}
             </div>
             <hr className="my-4" />
-            <div className="flex justify-between font-bold text-lg">
-              <span>Total</span>
-              <span className="text-accent-600">{formatPrice(cart.total)}</span>
-            </div>
+            {hasVehicleOrder ? (
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Order Total</span>
+                  <span className="font-medium">{formatPrice(cart.total)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Reservation Fee (5%)</span>
+                  <span className="font-medium">{formatPrice(reservationFeeTotal)}</span>
+                </div>
+                <div className="flex justify-between font-bold text-lg pt-2 border-t">
+                  <span>Pay Now</span>
+                  <span className="text-accent-600">{formatPrice(reservationFeeTotal)}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex justify-between font-bold text-lg">
+                <span>Total</span>
+                <span className="text-accent-600">{formatPrice(cart.total)}</span>
+              </div>
+            )}
             <button type="submit" disabled={loading || cart.items.length === 0 || !Number.isFinite(cart.total) || cart.total <= 0} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
               {loading
                 ? 'Processing...'
