@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "test:installment": "node scripts/installment-phase4-check.js",
+    "run:installment-reminders": "node scripts/run-installment-reminders.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
