@@ -13,6 +13,7 @@ const STATUS_CONFIG = {
   pending:   { label: 'Pending',        badgeClass: 'bg-yellow-100 text-yellow-800', icon: <FiClock size={13} /> },
   approved:  { label: 'Approved',       badgeClass: 'bg-green-100 text-green-800',  icon: <FiCheck size={13} /> },
   rejected:  { label: 'Rejected',       badgeClass: 'bg-red-100 text-red-800',      icon: <FiX size={13} /> },
+  cancelled: { label: 'Cancelled',      badgeClass: 'bg-gray-100 text-gray-600',    icon: <FiX size={13} /> },
   converted: { label: 'Converted',      badgeClass: 'bg-blue-100 text-blue-800',    icon: <FiDollarSign size={13} /> },
 };
 
@@ -66,6 +67,7 @@ export default function AdminInquiries() {
     approved:  inquiries.filter(i => i.status === 'approved').length,
     rejected:  inquiries.filter(i => i.status === 'rejected').length,
     converted: inquiries.filter(i => i.status === 'converted').length,
+    cancelled: inquiries.filter(i => i.status === 'cancelled').length,
   };
 
   return (
@@ -106,7 +108,7 @@ export default function AdminInquiries() {
           <FiFilter size={14} />
           <span>Filter:</span>
         </div>
-        {['', 'pending', 'approved', 'rejected', 'converted'].map(s => (
+        {['', 'pending', 'approved', 'rejected', 'cancelled', 'converted'].map(s => (
           <button key={s}
             onClick={() => setStatusFilter(s)}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${statusFilter === s ? 'bg-navy-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
@@ -226,7 +228,7 @@ export default function AdminInquiries() {
                 {isOpen && (
                   <div className="border-t border-gray-100 bg-gray-50 px-5 py-4">
                     <p className="text-sm font-semibold text-navy-900 mb-2">
-                      {actionForm.status === 'approved' ? '✅ Approving inquiry' : '❌ Rejecting inquiry'}
+                      {actionForm.status === 'approved' ? 'Approving inquiry' : 'Rejecting inquiry'}
                     </p>
                     <label className="block text-xs text-gray-500 mb-1">Admin Note <span className="text-gray-400">(optional)</span></label>
                     <textarea

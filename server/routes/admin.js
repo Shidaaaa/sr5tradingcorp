@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const User = require('../models/User');
 const Product = require('../models/Product');
@@ -14,6 +15,14 @@ const VehicleInquiry = require('../models/VehicleInquiry');
 const { generateReceiptNumber } = require('../utils/helpers');
 
 const router = express.Router();
+
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
 
 function roundCurrency(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
@@ -910,7 +919,7 @@ router.get('/reports/revenue', authenticateToken, requireAdmin, async (req, res)
 // ──────────────────────────────────────────────
 
 // GET /admin/inquiries — List all inquiries with optional status filter
-router.get('/inquiries', authenticateToken, requireAdmin, async (req, res) => {
+router.get('/inquiries', adminLimiter, authenticateToken, requireAdmin, async (req, res) => {
   try {
     const filter = {};
     if (req.query.status) filter.status = req.query.status;
@@ -929,7 +938,7 @@ router.get('/inquiries', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // PUT /admin/inquiries/:id — Update inquiry status (approve / reject)
-router.put('/inquiries/:id', authenticateToken, requireAdmin, async (req, res) => {
+router.put('/inquiries/:id', adminLimiter, authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { status, admin_notes } = req.body;
     const allowed = ['approved', 'rejected'];
@@ -939,8 +948,8 @@ router.put('/inquiries/:id', authenticateToken, requireAdmin, async (req, res) =
 
     const inquiry = await VehicleInquiry.findById(req.params.id);
     if (!inquiry) return res.status(404).json({ error: 'Inquiry not found' });
-    if (inquiry.status === 'converted') {
-      return res.status(400).json({ error: 'Converted inquiries cannot be modified' });
+    if (inquiry.status === 'converted' || inquiry.status === 'cancelled') {
+      return res.status(400).json({ error: 'Converted or cancelled inquiries cannot be modified' });
     }
 
     inquiry.status = status;

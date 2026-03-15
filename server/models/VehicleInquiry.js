@@ -27,7 +27,7 @@ const vehicleInquirySchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['pending', 'approved', 'rejected', 'converted'],
+      enum: ['pending', 'approved', 'rejected', 'cancelled', 'converted'],
       default: 'pending',
     },
 
