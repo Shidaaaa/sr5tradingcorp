@@ -4,6 +4,8 @@ const OrderItem = require('../models/OrderItem');
 const CartItem = require('../models/CartItem');
 const Product = require('../models/Product');
 const Payment = require('../models/Payment');
+const InstallmentPlan = require('../models/InstallmentPlan');
+const InstallmentSchedule = require('../models/InstallmentSchedule');
 const ReturnRequest = require('../models/ReturnRequest');
 const InventoryLog = require('../models/InventoryLog');
 const { authenticateToken } = require('../middleware/auth');
@@ -74,12 +76,31 @@ async function releaseOrderInventory(orderId, userId) {
 async function enrichOrder(order) {
   const items = await OrderItem.find({ order_id: order._id }).populate('product_id', 'name image_url type').lean();
   const payments = await Payment.find({ order_id: order._id, status: { $in: ['completed', 'pending'] } }).sort({ created_at: -1 }).lean();
+  const installmentPlan = await InstallmentPlan.findOne({ order_id: order._id }).lean();
+
+  let installmentSchedule = [];
+  if (installmentPlan) {
+    const now = new Date();
+    await InstallmentSchedule.updateMany(
+      {
+        installment_plan_id: installmentPlan._id,
+        status: { $in: ['pending', 'partially_paid'] },
+        due_date: { $lt: now },
+      },
+      { status: 'overdue' }
+    );
+
+    installmentSchedule = await InstallmentSchedule.find({ installment_plan_id: installmentPlan._id })
+      .sort({ installment_number: 1 })
+      .lean();
+  }
 
   const totalPaid = getUniqueCompletedPaymentTotal(payments);
 
   order.items = items.map(i => ({
     id: i._id,
     product_id: i.product_id?._id,
+    name: i.product_id?.name,
     product_name: i.product_id?.name,
     product_image: i.product_id?.image_url,
     product_type: i.product_id?.type,
@@ -96,8 +117,44 @@ async function enrichOrder(order) {
     payment_type: p.payment_type,
     status: p.status,
     receipt_number: p.receipt_number,
+    reference_number: p.reference_number,
+    installment_number: p.installment_number,
+    total_installments: p.total_installments,
     created_at: p.created_at,
   }));
+
+  if (installmentPlan) {
+    const paidScheduleTotal = installmentSchedule.reduce((sum, row) => sum + Number(row.amount_paid || 0), 0);
+    const nextPending = installmentSchedule.find(row => row.status !== 'paid') || null;
+
+    order.installment_plan = {
+      id: installmentPlan._id,
+      status: installmentPlan.status,
+      total_financed_amount: installmentPlan.total_financed_amount,
+      down_payment_amount: installmentPlan.down_payment_amount,
+      down_payment_paid: installmentPlan.down_payment_paid,
+      number_of_installments: installmentPlan.number_of_installments,
+      monthly_amount: installmentPlan.monthly_amount,
+      interest_rate: installmentPlan.interest_rate,
+      total_with_interest: installmentPlan.total_with_interest,
+      start_date: installmentPlan.start_date,
+      created_at: installmentPlan.created_at,
+      paid_schedule_total: Number(paidScheduleTotal.toFixed(2)),
+      remaining_schedule_total: Number(Math.max(0, (installmentPlan.total_with_interest || 0) - paidScheduleTotal).toFixed(2)),
+      next_due_date: nextPending?.due_date || null,
+      schedule: installmentSchedule.map(row => ({
+        id: row._id,
+        installment_number: row.installment_number,
+        amount_due: row.amount_due,
+        amount_paid: row.amount_paid,
+        due_date: row.due_date,
+        paid_date: row.paid_date,
+        status: row.status,
+      })),
+    };
+  } else {
+    order.installment_plan = null;
+  }
 
   order.id = order._id;
   order.total_paid = totalPaid;

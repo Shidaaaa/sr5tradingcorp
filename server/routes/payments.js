@@ -3,6 +3,8 @@ const Payment = require('../models/Payment');
 const Order = require('../models/Order');
 const OrderItem = require('../models/OrderItem');
 const Booking = require('../models/Booking');
+const InstallmentPlan = require('../models/InstallmentPlan');
+const InstallmentSchedule = require('../models/InstallmentSchedule');
 const { authenticateToken } = require('../middleware/auth');
 const { generateReceiptNumber } = require('../utils/helpers');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -40,6 +42,167 @@ function getStripeImageUrl(rawUrl) {
   }
 
   return null;
+}
+
+function roundCurrency(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function isInstallmentPayableStatus(status) {
+  return ['pending', 'active', 'defaulted'].includes(status);
+}
+
+async function markOverdueScheduleRows(installmentPlanId, session = null) {
+  await InstallmentSchedule.updateMany(
+    {
+      installment_plan_id: installmentPlanId,
+      status: { $in: ['pending', 'partially_paid'] },
+      due_date: { $lt: new Date() },
+    },
+    { status: 'overdue' },
+    session ? { session } : undefined
+  );
+}
+
+async function applyInstallmentCardPayment({ planId, installmentNumber, amount, referenceNumber, userId, session }) {
+  const plan = await InstallmentPlan.findById(planId).session(session);
+  if (!plan) {
+    const err = new Error('Installment plan not found.');
+    err.status = 404;
+    throw err;
+  }
+
+  if (!plan.down_payment_paid) {
+    const err = new Error('Down payment must be paid before monthly card payments.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (!isInstallmentPayableStatus(plan.status)) {
+    const err = new Error(`Cannot record payment for plan status ${plan.status}.`);
+    err.status = 400;
+    throw err;
+  }
+
+  await markOverdueScheduleRows(plan._id, session);
+
+  const firstUnpaid = await InstallmentSchedule.findOne({
+    installment_plan_id: plan._id,
+    status: { $ne: 'paid' },
+  }).session(session).sort({ installment_number: 1 });
+
+  if (!firstUnpaid) {
+    const err = new Error('All installments are already paid.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (installmentNumber !== firstUnpaid.installment_number) {
+    const err = new Error(`Installments must be paid in order. Next payable installment is #${firstUnpaid.installment_number}.`);
+    err.status = 400;
+    throw err;
+  }
+
+  const row = await InstallmentSchedule.findOne({
+    installment_plan_id: plan._id,
+    installment_number: installmentNumber,
+  }).session(session);
+
+  if (!row) {
+    const err = new Error('Installment schedule row not found.');
+    err.status = 404;
+    throw err;
+  }
+
+  if (row.status === 'paid') {
+    const err = new Error('This installment is already paid.');
+    err.status = 400;
+    throw err;
+  }
+
+  const amountToApply = roundCurrency(amount);
+  const dueLeft = roundCurrency((row.amount_due || 0) - (row.amount_paid || 0));
+  if (amountToApply <= 0) {
+    const err = new Error('Invalid installment amount.');
+    err.status = 400;
+    throw err;
+  }
+  if (amountToApply > dueLeft) {
+    const err = new Error(`Amount exceeds remaining due for installment #${installmentNumber}.`);
+    err.status = 400;
+    throw err;
+  }
+
+  const duplicatePayment = await Payment.findOne({
+    order_id: plan.order_id,
+    payment_type: 'installment',
+    reference_number: referenceNumber,
+    status: 'completed',
+  }).session(session);
+
+  if (duplicatePayment) {
+    return {
+      payment: duplicatePayment,
+      schedule: row,
+      plan,
+      alreadyRecorded: true,
+    };
+  }
+
+  const updatedAmountPaid = roundCurrency((row.amount_paid || 0) + amountToApply);
+  if (updatedAmountPaid >= roundCurrency(row.amount_due)) {
+    row.amount_paid = roundCurrency(row.amount_due);
+    row.status = 'paid';
+    row.paid_date = new Date();
+  } else {
+    row.amount_paid = updatedAmountPaid;
+    row.status = row.due_date < new Date() ? 'overdue' : 'partially_paid';
+  }
+  await row.save({ session });
+
+  const [payment] = await Payment.create([{
+    order_id: plan.order_id,
+    user_id: userId,
+    amount: amountToApply,
+    payment_method: 'credit_card',
+    payment_type: 'installment',
+    reference_number: referenceNumber,
+    status: 'completed',
+    receipt_number: generateReceiptNumber(),
+    installment_number: row.installment_number,
+    total_installments: plan.number_of_installments,
+  }], { session });
+
+  const remainingRows = await InstallmentSchedule.countDocuments({
+    installment_plan_id: plan._id,
+    status: { $ne: 'paid' },
+  }).session(session);
+
+  const order = await Order.findById(plan.order_id).session(session);
+  if (!order) {
+    const err = new Error('Order not found.');
+    err.status = 404;
+    throw err;
+  }
+
+  if (remainingRows === 0) {
+    plan.status = 'completed';
+    order.status = 'completed';
+  } else {
+    plan.status = 'active';
+    order.status = 'installment_active';
+  }
+  order.payment_method = 'installment';
+
+  await plan.save({ session });
+  await order.save({ session });
+
+  return {
+    payment,
+    schedule: row,
+    plan,
+    alreadyRecorded: false,
+  };
 }
 
 // Process payment
@@ -393,6 +556,85 @@ router.post('/stripe/create-order-reservation-session', authenticateToken, async
   }
 });
 
+// Create Stripe Checkout Session for next monthly installment payment
+router.post('/stripe/create-installment-session', authenticateToken, async (req, res) => {
+  try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+    }
+
+    const { order_id } = req.body;
+    if (!order_id) return res.status(400).json({ error: 'Order ID is required.' });
+
+    const order = await Order.findOne({ _id: order_id, user_id: req.user.id }).lean();
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    if (order.payment_method !== 'installment') {
+      return res.status(400).json({ error: 'This order is not using installment payment.' });
+    }
+
+    const plan = await InstallmentPlan.findOne({ order_id: order._id }).lean();
+    if (!plan) return res.status(404).json({ error: 'Installment plan not found.' });
+    if (!plan.down_payment_paid) {
+      return res.status(400).json({ error: 'Down payment must be paid before monthly installment payment.' });
+    }
+    if (!isInstallmentPayableStatus(plan.status)) {
+      return res.status(400).json({ error: `Cannot pay for installment plan status ${plan.status}.` });
+    }
+
+    await markOverdueScheduleRows(plan._id);
+
+    const nextRow = await InstallmentSchedule.findOne({
+      installment_plan_id: plan._id,
+      status: { $ne: 'paid' },
+    }).sort({ installment_number: 1 }).lean();
+
+    if (!nextRow) {
+      return res.status(400).json({ error: 'All installments are already paid.' });
+    }
+
+    const dueLeft = roundCurrency((nextRow.amount_due || 0) - (nextRow.amount_paid || 0));
+    if (dueLeft <= 0) {
+      return res.status(400).json({ error: 'No payable balance left for the next installment.' });
+    }
+
+    const clientUrl = getClientUrl(req);
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: 'php',
+          product_data: {
+            name: `Installment #${nextRow.installment_number} — ${order.order_number}`,
+            description: `Monthly installment payment for your vehicle order at SR-5 Trading Corporation`,
+          },
+          unit_amount: Math.round(dueLeft * 100),
+        },
+        quantity: 1,
+      }],
+      mode: 'payment',
+      success_url: `${clientUrl}/payment/success?session_id={CHECKOUT_SESSION_ID}&type=installment`,
+      cancel_url: `${clientUrl}/orders/${order._id}`,
+      metadata: {
+        payment_type: 'installment',
+        order_id: order._id.toString(),
+        installment_plan_id: plan._id.toString(),
+        installment_number: String(nextRow.installment_number),
+        user_id: req.user.id.toString(),
+      },
+    });
+
+    res.json({
+      sessionId: session.id,
+      url: session.url,
+      installment_number: nextRow.installment_number,
+      amount_due: dueLeft,
+    });
+  } catch (err) {
+    console.error('Stripe installment session error:', err.message);
+    res.status(500).json({ error: 'Failed to create installment payment session.' });
+  }
+});
+
 // Verify Stripe order reservation fee payment and mark order as reserved-paid
 router.post('/stripe/verify-order-reservation', authenticateToken, async (req, res) => {
   try {
@@ -435,6 +677,88 @@ router.post('/stripe/verify-order-reservation', authenticateToken, async (req, r
   } catch (err) {
     console.error('Stripe order reservation verify error:', err.message);
     res.status(500).json({ error: 'Failed to verify payment.' });
+  }
+});
+
+// Verify Stripe monthly installment payment and update schedule
+router.post('/stripe/verify-installment', authenticateToken, async (req, res) => {
+  let dbSession = null;
+  try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return res.status(503).json({ error: 'Stripe is not configured on the server.' });
+    }
+
+    const { session_id } = req.body;
+    if (!session_id) return res.status(400).json({ error: 'Session ID is required.' });
+
+    const stripeSession = await stripe.checkout.sessions.retrieve(session_id);
+    if (stripeSession.payment_status !== 'paid') {
+      return res.status(400).json({ error: 'Payment not completed.' });
+    }
+
+    if (!Number.isFinite(stripeSession.amount_total) || stripeSession.amount_total <= 0) {
+      return res.status(400).json({ error: 'Invalid paid amount from payment session.' });
+    }
+
+    if (stripeSession.metadata?.payment_type !== 'installment') {
+      return res.status(400).json({ error: 'This session is not an installment payment session.' });
+    }
+
+    const existing = await Payment.findOne({ reference_number: stripeSession.id });
+    if (existing) {
+      return res.json({ ...existing.toObject(), id: existing._id, already_recorded: true });
+    }
+
+    const orderId = stripeSession.metadata?.order_id;
+    const planId = stripeSession.metadata?.installment_plan_id;
+    const installmentNumber = Number(stripeSession.metadata?.installment_number);
+    if (!orderId || !planId || !Number.isInteger(installmentNumber) || installmentNumber <= 0) {
+      return res.status(400).json({ error: 'Invalid installment payment metadata from Stripe session.' });
+    }
+
+    const order = await Order.findOne({ _id: orderId, user_id: req.user.id }).lean();
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+
+    const amount = roundCurrency(stripeSession.amount_total / 100);
+
+    dbSession = await Order.startSession();
+    await dbSession.startTransaction();
+
+    const result = await applyInstallmentCardPayment({
+      planId,
+      installmentNumber,
+      amount,
+      referenceNumber: stripeSession.id,
+      userId: req.user.id,
+      session: dbSession,
+    });
+
+    if (result.alreadyRecorded) {
+      await dbSession.abortTransaction();
+      return res.json({
+        ...result.payment.toObject(),
+        id: result.payment._id,
+        already_recorded: true,
+      });
+    }
+
+    await dbSession.commitTransaction();
+
+    return res.json({
+      ...result.payment.toObject(),
+      id: result.payment._id,
+      order_id: orderId,
+      installment_number: installmentNumber,
+    });
+  } catch (err) {
+    if (dbSession && dbSession.inTransaction()) {
+      await dbSession.abortTransaction();
+    }
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('Stripe installment verify error:', err.message);
+    return res.status(500).json({ error: 'Failed to verify installment payment.' });
+  } finally {
+    if (dbSession) await dbSession.endSession();
   }
 });
 

@@ -22,7 +22,7 @@ router.get('/reservation-fee/:productId', authenticateToken, async (req, res) =>
 
     const fee = calculateReservationFee(product);
     const days = product.is_popular ? 14 : 7;
-    const rate = product.is_popular ? 5 : 2;
+    const rate = 5;
     res.json({ fee, is_popular: product.is_popular, days, rate, product_name: product.name, product_price: product.price });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
