@@ -581,10 +581,21 @@ router.get('/inventory/:id/logs', authenticateToken, requireAdmin, async (req, r
 // Sales report
 router.get('/sales', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { month, year } = req.query;
+    const { month, year, start_date, end_date, all_time } = req.query;
     const completedStatuses = ['picked_up', 'delivered', 'completed'];
-    const orderFilter = { status: { $in: completedStatuses } };
-    if (month && year) {
+    const orderFilter = {};
+    if (all_time === '1') {
+      // No date filter for all-time mode.
+    } else if (start_date && end_date) {
+      const start = new Date(start_date);
+      const end = new Date(end_date);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+        return res.status(400).json({ error: 'Invalid date range.' });
+      }
+      const endExclusive = new Date(end);
+      endExclusive.setDate(endExclusive.getDate() + 1);
+      orderFilter.updated_at = { $gte: start, $lt: endExclusive };
+    } else if (month && year) {
       const m = parseInt(month);
       const y = parseInt(year);
       orderFilter.updated_at = { $gte: new Date(y, m - 1, 1), $lt: new Date(y, m, 1) };
@@ -598,6 +609,10 @@ router.get('/sales', authenticateToken, requireAdmin, async (req, res) => {
       const items = await OrderItem.find({ order_id: order._id }).lean();
       const payments = await Payment.find({ order_id: order._id, status: 'completed' }).lean();
       const paid_amount = payments.reduce((sum, p) => sum + p.amount, 0);
+      const hasCompletedPayment = paid_amount > 0;
+      const isCompletedLifecycle = completedStatuses.includes(order.status);
+      if (!hasCompletedPayment && !isCompletedLifecycle) continue;
+
       result.push({
         id: order._id,
         order_number: order.order_number,
@@ -617,6 +632,108 @@ router.get('/sales', authenticateToken, requireAdmin, async (req, res) => {
     }
 
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// Daily sales report for selected month/year
+router.get('/sales/daily', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const now = new Date();
+    const month = parseInt(req.query.month, 10) || (now.getMonth() + 1);
+    const year = parseInt(req.query.year, 10) || now.getFullYear();
+    const { start_date, end_date, all_time } = req.query;
+    const completedStatuses = ['picked_up', 'delivered', 'completed'];
+
+    let startDate = new Date(year, month - 1, 1);
+    let endDate = new Date(year, month, 1);
+    if (all_time === '1') {
+      startDate = new Date(0);
+      endDate = new Date('9999-12-31T23:59:59.999Z');
+    } else if (start_date && end_date) {
+      startDate = new Date(start_date);
+      const end = new Date(end_date);
+      if (Number.isNaN(startDate.getTime()) || Number.isNaN(end.getTime())) {
+        return res.status(400).json({ error: 'Invalid date range.' });
+      }
+      endDate = new Date(end);
+      endDate.setDate(endDate.getDate() + 1);
+    }
+
+    const orders = await Order.find({
+      updated_at: { $gte: startDate, $lt: endDate },
+    })
+      .select('_id order_number updated_at total_amount status')
+      .lean();
+
+    const paymentsInRange = await Payment.find({
+      status: 'completed',
+      order_id: { $ne: null },
+      created_at: { $gte: startDate, $lt: endDate },
+    })
+      .select('order_id amount created_at')
+      .lean();
+
+    const paidOrderIds = new Set(paymentsInRange.map(payment => String(payment.order_id)));
+
+    const paidByDate = new Map();
+    for (const payment of paymentsInRange) {
+      const dateKey = new Date(payment.created_at).toISOString().slice(0, 10);
+      paidByDate.set(dateKey, Number(paidByDate.get(dateKey) || 0) + Number(payment.amount || 0));
+    }
+
+    const dailyMap = new Map();
+    for (const order of orders) {
+      const hasCompletedPayment = paidOrderIds.has(String(order._id));
+      if (!hasCompletedPayment && !completedStatuses.includes(order.status)) continue;
+
+      const dateKey = new Date(order.updated_at).toISOString().slice(0, 10);
+      if (!dailyMap.has(dateKey)) {
+        dailyMap.set(dateKey, {
+          date: dateKey,
+          completed_orders: 0,
+          total_sales: 0,
+          total_paid: 0,
+          total_balance: 0,
+        });
+      }
+
+      const day = dailyMap.get(dateKey);
+      const totalAmount = Number(order.total_amount || 0);
+
+      day.completed_orders += 1;
+      day.total_sales += totalAmount;
+    }
+
+    for (const [dateKey, totalPaid] of paidByDate.entries()) {
+      if (!dailyMap.has(dateKey)) {
+        dailyMap.set(dateKey, {
+          date: dateKey,
+          completed_orders: 0,
+          total_sales: 0,
+          total_paid: 0,
+          total_balance: 0,
+        });
+      }
+      const day = dailyMap.get(dateKey);
+      day.total_paid += Number(totalPaid || 0);
+    }
+
+    for (const day of dailyMap.values()) {
+      day.total_balance = Math.max(0, Number(day.total_sales || 0) - Number(day.total_paid || 0));
+    }
+
+    const daily = Array.from(dailyMap.values())
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(day => ({
+        ...day,
+        total_sales: roundCurrency(day.total_sales),
+        total_paid: roundCurrency(day.total_paid),
+        total_balance: roundCurrency(day.total_balance),
+      }));
+
+    res.json(daily);
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
   }

@@ -107,7 +107,32 @@ export const api = {
   getCustomers: () => apiRequest('/admin/customers'),
   getInventory: () => apiRequest('/admin/inventory'),
   getInventoryLog: (productId) => apiRequest(`/admin/inventory/log${productId ? '?product_id=' + productId : ''}`),
-  getSales: (month, year) => apiRequest(`/admin/sales?month=${month}&year=${year}`),
+  getSales: (month, year, options = {}) => {
+    const params = new URLSearchParams();
+    if (options.allTime) {
+      params.set('all_time', '1');
+    } else if (options.startDate && options.endDate) {
+      params.set('start_date', options.startDate);
+      params.set('end_date', options.endDate);
+    } else {
+      params.set('month', month);
+      params.set('year', year);
+    }
+    return apiRequest(`/admin/sales?${params.toString()}`);
+  },
+  getDailySalesReport: (month, year, options = {}) => {
+    const params = new URLSearchParams();
+    if (options.allTime) {
+      params.set('all_time', '1');
+    } else if (options.startDate && options.endDate) {
+      params.set('start_date', options.startDate);
+      params.set('end_date', options.endDate);
+    } else {
+      params.set('month', month);
+      params.set('year', year);
+    }
+    return apiRequest(`/admin/sales/daily?${params.toString()}`);
+  },
   getMonthlyReport: (year) => apiRequest(`/admin/reports/monthly${year ? '?year=' + year : ''}`),
   getRevenueReport: () => apiRequest('/admin/reports/revenue'),
 };

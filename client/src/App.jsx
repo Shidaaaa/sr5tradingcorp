@@ -26,7 +26,6 @@ import AdminInventory from './pages/admin/AdminInventory';
 import AdminSales from './pages/admin/AdminSales';
 import AdminCustomers from './pages/admin/AdminCustomers';
 import AdminFeedback from './pages/admin/AdminFeedback';
-import AdminReports from './pages/admin/AdminReports';
 import AdminReturns from './pages/admin/AdminReturns';
 
 function ProtectedRoute({ children }) {
@@ -78,7 +77,7 @@ export default function App() {
         <Route path="sales" element={<AdminSales />} />
         <Route path="customers" element={<AdminCustomers />} />
         <Route path="feedback" element={<AdminFeedback />} />
-        <Route path="reports" element={<AdminReports />} />
+        <Route path="reports" element={<Navigate to="/admin/sales" replace />} />
         <Route path="returns" element={<AdminReturns />} />
       </Route>
     </Routes>
