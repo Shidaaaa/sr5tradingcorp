@@ -1,4 +1,7 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const User = require('../models/User');
 const Product = require('../models/Product');
@@ -10,8 +13,143 @@ const Booking = require('../models/Booking');
 const InventoryLog = require('../models/InventoryLog');
 const Feedback = require('../models/Feedback');
 const ReturnRequest = require('../models/ReturnRequest');
+const InstallmentPlan = require('../models/InstallmentPlan');
+const InstallmentSchedule = require('../models/InstallmentSchedule');
+const { calculateInstallmentBreakdown, generateReceiptNumber } = require('../utils/helpers');
 
 const router = express.Router();
+const ADMIN_INSTORE_PAYMENT_METHODS = ['cash', 'bank_transfer', 'credit_card', 'debit_card'];
+const paymentReceiptDir = path.join(__dirname, '..', 'uploads', 'payment-receipts');
+
+if (!fs.existsSync(paymentReceiptDir)) {
+  fs.mkdirSync(paymentReceiptDir, { recursive: true });
+}
+
+const uploadReceiptStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, paymentReceiptDir),
+  filename: (req, file, cb) => {
+    const safeExt = path.extname(file.originalname || '').toLowerCase() || '.jpg';
+    cb(null, `receipt-${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`);
+  },
+});
+
+const uploadReceipt = multer({
+  storage: uploadReceiptStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    if (!allowed.includes(file.mimetype)) {
+      return cb(createHttpError(400, 'Receipt file must be JPG, PNG, WEBP, or PDF.'));
+    }
+    cb(null, true);
+  },
+});
+
+function createHttpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function normalizeReferenceNumber(value) {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).trim();
+  return normalized.length ? normalized : null;
+}
+
+function assertValidAdminPaymentMethod(method) {
+  if (!ADMIN_INSTORE_PAYMENT_METHODS.includes(method)) {
+    throw createHttpError(400, 'Invalid payment method for admin-recorded in-store payment.');
+  }
+}
+
+function assertOrderPayable(order) {
+  if (!order) throw createHttpError(404, 'Order not found.');
+  if (['cancelled', 'returned', 'replaced'].includes(order.status)) {
+    throw createHttpError(400, `Cannot record payment for order status ${order.status}.`);
+  }
+}
+
+function roundCurrency(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function addMonths(baseDate, monthsToAdd) {
+  const date = new Date(baseDate);
+  date.setMonth(date.getMonth() + monthsToAdd);
+  return date;
+}
+
+function getPublicBaseUrl(req) {
+  const configured = (process.env.PUBLIC_BASE_URL || '').trim();
+  if (configured && /^https?:\/\//i.test(configured)) {
+    return configured.replace(/\/$/, '');
+  }
+
+  const host = req.get('host');
+  return `${req.protocol}://${host}`.replace(/\/$/, '');
+}
+
+function requireReceiptImageForManualPayment(receiptImageUrl) {
+  if (!receiptImageUrl || typeof receiptImageUrl !== 'string' || !receiptImageUrl.trim()) {
+    throw createHttpError(400, 'Please upload a receipt image or PDF before recording this payment.');
+  }
+}
+
+// Upload payment receipt proof (image/pdf) for admin-recorded payments
+router.post('/payments/upload-receipt', authenticateToken, requireAdmin, (req, res) => {
+  uploadReceipt.single('receipt')(req, res, (err) => {
+    if (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'Receipt file is too large. Maximum size is 10MB.' });
+      }
+      return res.status(400).json({ error: err.message || 'Invalid receipt upload.' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'Receipt file is required.' });
+    }
+
+    const relativePath = `/uploads/payment-receipts/${req.file.filename}`;
+    const absoluteUrl = `${getPublicBaseUrl(req)}${relativePath}`;
+    return res.status(201).json({
+      message: 'Receipt uploaded successfully.',
+      receipt_image_url: absoluteUrl,
+      receipt_image_path: relativePath,
+    });
+  });
+});
+
+async function markOverdueScheduleRows(installmentPlanId) {
+  await InstallmentSchedule.updateMany(
+    {
+      installment_plan_id: installmentPlanId,
+      status: { $in: ['pending', 'partially_paid'] },
+      due_date: { $lt: new Date() },
+    },
+    { status: 'overdue' }
+  );
+}
+
+async function getPlanWithSchedule(orderId) {
+  const plan = await InstallmentPlan.findOne({ order_id: orderId }).lean();
+  if (!plan) return null;
+
+  await markOverdueScheduleRows(plan._id);
+  const schedule = await InstallmentSchedule.find({ installment_plan_id: plan._id })
+    .sort({ installment_number: 1 })
+    .lean();
+
+  return {
+    ...plan,
+    id: plan._id,
+    schedule: schedule.map(row => ({
+      ...row,
+      id: row._id,
+    })),
+  };
+}
 
 function getUniqueCompletedPaymentTotal(payments = []) {
   const seenRefs = new Set();
@@ -103,6 +241,9 @@ router.get('/orders', authenticateToken, requireAdmin, async (req, res) => {
       order.email = order.user_id?.email || '';
       order.total_paid = totalPaid;
       order.remaining_balance = Math.max(0, (order.total_amount || 0) - totalPaid);
+
+      const installment = await getPlanWithSchedule(order._id);
+      order.installment_plan = installment;
     }
     res.json(orders);
   } catch (err) {
@@ -119,6 +260,362 @@ router.put('/orders/:id', authenticateToken, requireAdmin, async (req, res) => {
     res.json({ ...order, id: order._id });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// Setup installment plan for an order
+router.post('/orders/:id/setup-installment', authenticateToken, requireAdmin, async (req, res) => {
+  const session = await Order.startSession();
+  try {
+    await session.startTransaction();
+
+    const order = await Order.findById(req.params.id).session(session);
+    assertOrderPayable(order);
+    if (!order.has_vehicle) throw createHttpError(400, 'Installment is only available for vehicle orders.');
+    if (!order.reservation_fee_paid) throw createHttpError(400, 'Reservation fee must be paid before setting up installment.');
+    if (order.payment_method === 'full') throw createHttpError(400, 'Order is already marked for full payment.');
+
+    const existingPlan = await InstallmentPlan.findOne({ order_id: order._id }).session(session);
+    if (existingPlan) throw createHttpError(409, 'Installment plan already exists for this order.');
+
+    const completedPayments = await Payment.find({ order_id: order._id, status: 'completed' }).session(session).lean();
+    const totalPaid = getUniqueCompletedPaymentTotal(completedPayments);
+    const remainingBalance = roundCurrency(Math.max(0, (order.total_amount || 0) - totalPaid));
+    if (remainingBalance <= 0) throw createHttpError(400, 'Order has no remaining balance.');
+
+    const breakdown = calculateInstallmentBreakdown(remainingBalance, {
+      downPaymentRate: 0.5,
+      numberOfInstallments: 12,
+      interestRate: 0.01,
+    });
+
+    const startDate = req.body.start_date ? new Date(req.body.start_date) : new Date();
+    if (Number.isNaN(startDate.getTime())) throw createHttpError(400, 'Invalid start date.');
+
+    const [plan] = await InstallmentPlan.create([{
+      order_id: order._id,
+      user_id: order.user_id,
+      total_financed_amount: breakdown.financedAmount,
+      down_payment_amount: breakdown.downPaymentAmount,
+      down_payment_paid: false,
+      number_of_installments: breakdown.numberOfInstallments,
+      monthly_amount: breakdown.monthlyAmount,
+      interest_rate: breakdown.interestRate,
+      total_with_interest: breakdown.totalWithInterest,
+      status: 'pending',
+      start_date: null,
+    }], { session });
+
+    const scheduleRows = [];
+    for (let i = 1; i <= breakdown.numberOfInstallments; i += 1) {
+      scheduleRows.push({
+        installment_plan_id: plan._id,
+        installment_number: i,
+        amount_due: breakdown.monthlyAmount,
+        amount_paid: 0,
+        due_date: addMonths(startDate, i),
+        status: 'pending',
+      });
+    }
+    await InstallmentSchedule.insertMany(scheduleRows, { session });
+
+    order.payment_method = 'installment';
+    order.status = 'installment_active';
+    await order.save({ session });
+
+    await session.commitTransaction();
+
+    const installment = await getPlanWithSchedule(order._id);
+    res.status(201).json({
+      message: 'Installment plan created.',
+      order_id: order._id,
+      installment_plan: installment,
+      remaining_balance: remainingBalance,
+    });
+  } catch (err) {
+    if (session.inTransaction()) await session.abortTransaction();
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    res.status(500).json({ error: 'Server error setting up installment.' });
+  } finally {
+    await session.endSession();
+  }
+});
+
+// Record admin payment for full settlement or down payment
+router.post('/orders/:id/record-payment', authenticateToken, requireAdmin, async (req, res) => {
+  const session = await Order.startSession();
+  try {
+    const { amount, payment_method, reference_number, payment_type, receipt_image_url } = req.body;
+    if (!amount || Number(amount) <= 0) throw createHttpError(400, 'Valid payment amount is required.');
+    if (!payment_method) throw createHttpError(400, 'Payment method is required.');
+    if (!['full', 'down_payment'].includes(payment_type)) throw createHttpError(400, 'payment_type must be full or down_payment.');
+
+    assertValidAdminPaymentMethod(payment_method);
+    requireReceiptImageForManualPayment(receipt_image_url);
+    const normalizedReference = normalizeReferenceNumber(reference_number);
+    if (payment_method !== 'cash' && !normalizedReference) {
+      throw createHttpError(400, 'Reference number is required for non-cash payments.');
+    }
+
+    await session.startTransaction();
+
+    const order = await Order.findById(req.params.id).session(session);
+    assertOrderPayable(order);
+
+    const completedPayments = await Payment.find({ order_id: order._id, status: 'completed' }).session(session).lean();
+    const totalPaid = getUniqueCompletedPaymentTotal(completedPayments);
+    const remainingBalance = roundCurrency(Math.max(0, (order.total_amount || 0) - totalPaid));
+    const normalizedAmount = roundCurrency(Number(amount));
+
+    if (payment_type === 'full') {
+      if (normalizedAmount > remainingBalance) throw createHttpError(400, 'Payment amount cannot exceed remaining balance.');
+
+      if (normalizedReference) {
+        const existing = await Payment.findOne({
+          order_id: order._id,
+          payment_type: 'full',
+          reference_number: normalizedReference,
+          status: 'completed',
+        }).session(session).lean();
+        if (existing) throw createHttpError(409, 'A full payment with this reference number already exists for this order.');
+      }
+
+      const [payment] = await Payment.create([{
+        order_id: order._id,
+        user_id: order.user_id,
+        amount: normalizedAmount,
+        payment_method,
+        payment_type: 'full',
+        reference_number: normalizedReference,
+        status: 'completed',
+        receipt_number: generateReceiptNumber(),
+        receipt_image_url: receipt_image_url.trim(),
+      }], { session });
+
+      const updatedPaid = roundCurrency(totalPaid + normalizedAmount);
+      const updatedRemaining = roundCurrency(Math.max(0, (order.total_amount || 0) - updatedPaid));
+
+      order.payment_method = 'full';
+      order.status = updatedRemaining <= 0 ? 'completed' : 'confirmed';
+      await order.save({ session });
+
+      await session.commitTransaction();
+      return res.status(201).json({
+        message: 'Full payment recorded.',
+        payment: { ...payment.toObject(), id: payment._id },
+        remaining_balance: updatedRemaining,
+      });
+    }
+
+    const plan = await InstallmentPlan.findOne({ order_id: order._id }).session(session);
+    if (!plan) throw createHttpError(404, 'Installment plan not found for this order.');
+    if (plan.down_payment_paid) throw createHttpError(400, 'Down payment is already recorded.');
+
+    if (Math.abs(normalizedAmount - roundCurrency(plan.down_payment_amount)) > 0.01) {
+      throw createHttpError(400, `Down payment must be exactly ${plan.down_payment_amount}.`);
+    }
+
+    const paymentDate = req.body.payment_date ? new Date(req.body.payment_date) : new Date();
+    if (Number.isNaN(paymentDate.getTime())) throw createHttpError(400, 'Invalid payment date.');
+
+    if (normalizedReference) {
+      const existing = await Payment.findOne({
+        order_id: order._id,
+        payment_type: 'down_payment',
+        reference_number: normalizedReference,
+        status: 'completed',
+      }).session(session).lean();
+      if (existing) throw createHttpError(409, 'A down payment with this reference number already exists for this order.');
+    }
+
+    const [payment] = await Payment.create([{
+      order_id: order._id,
+      user_id: order.user_id,
+      amount: normalizedAmount,
+      payment_method,
+      payment_type: 'down_payment',
+      reference_number: normalizedReference,
+      status: 'completed',
+      receipt_number: generateReceiptNumber(),
+      receipt_image_url: receipt_image_url.trim(),
+    }], { session });
+
+    plan.down_payment_paid = true;
+    plan.start_date = paymentDate;
+    plan.status = 'active';
+    await plan.save({ session });
+
+    const existingSchedule = await InstallmentSchedule.find({ installment_plan_id: plan._id }).session(session).sort({ installment_number: 1 });
+    for (const row of existingSchedule) {
+      row.due_date = addMonths(paymentDate, row.installment_number);
+      if (row.status !== 'paid') {
+        row.status = row.due_date < new Date() ? 'overdue' : 'pending';
+      }
+      await row.save({ session });
+    }
+
+    order.payment_method = 'installment';
+    order.status = 'installment_active';
+    await order.save({ session });
+
+    await session.commitTransaction();
+    return res.status(201).json({
+      message: 'Down payment recorded and installment plan activated.',
+      payment: { ...payment.toObject(), id: payment._id },
+      installment_plan: { ...plan.toObject(), id: plan._id },
+    });
+  } catch (err) {
+    if (session.inTransaction()) await session.abortTransaction();
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    res.status(500).json({ error: 'Server error recording payment.' });
+  } finally {
+    await session.endSession();
+  }
+});
+
+// Record monthly installment payment
+router.post('/installments/:planId/record-payment', authenticateToken, requireAdmin, async (req, res) => {
+  const session = await Order.startSession();
+  try {
+    const { installment_number, amount, payment_method, reference_number, receipt_image_url } = req.body;
+    const installmentNumber = Number(installment_number);
+    if (!Number.isInteger(installmentNumber) || installmentNumber <= 0) throw createHttpError(400, 'installment_number must be a valid positive integer.');
+    if (!amount || Number(amount) <= 0) throw createHttpError(400, 'Valid amount is required.');
+    if (!payment_method) throw createHttpError(400, 'payment_method is required.');
+
+    assertValidAdminPaymentMethod(payment_method);
+    requireReceiptImageForManualPayment(receipt_image_url);
+    const normalizedReference = normalizeReferenceNumber(reference_number);
+    if (payment_method !== 'cash' && !normalizedReference) {
+      throw createHttpError(400, 'Reference number is required for non-cash payments.');
+    }
+
+    await session.startTransaction();
+
+    const plan = await InstallmentPlan.findById(req.params.planId).session(session);
+    if (!plan) throw createHttpError(404, 'Installment plan not found.');
+    if (!plan.down_payment_paid) throw createHttpError(400, 'Down payment must be recorded before monthly payments.');
+    if (!['active', 'pending', 'defaulted'].includes(plan.status)) {
+      throw createHttpError(400, `Cannot record payment for plan status ${plan.status}.`);
+    }
+
+    await InstallmentSchedule.updateMany(
+      {
+        installment_plan_id: plan._id,
+        status: { $in: ['pending', 'partially_paid'] },
+        due_date: { $lt: new Date() },
+      },
+      { status: 'overdue' },
+      { session }
+    );
+
+    const firstUnpaid = await InstallmentSchedule.findOne({
+      installment_plan_id: plan._id,
+      status: { $ne: 'paid' },
+    }).session(session).sort({ installment_number: 1 });
+
+    if (firstUnpaid && installmentNumber !== firstUnpaid.installment_number) {
+      throw createHttpError(400, `Installments must be paid in order. Next payable installment is #${firstUnpaid.installment_number}.`);
+    }
+
+    const row = await InstallmentSchedule.findOne({
+      installment_plan_id: plan._id,
+      installment_number: installmentNumber,
+    }).session(session);
+    if (!row) throw createHttpError(404, 'Installment schedule row not found.');
+    if (row.status === 'paid') throw createHttpError(400, 'This installment is already paid.');
+
+    const amountToApply = roundCurrency(Number(amount));
+    const dueLeft = roundCurrency((row.amount_due || 0) - (row.amount_paid || 0));
+    if (amountToApply > dueLeft) throw createHttpError(400, `Amount exceeds remaining due for installment #${installmentNumber}.`);
+
+    if (normalizedReference) {
+      const existing = await Payment.findOne({
+        order_id: plan.order_id,
+        payment_type: 'installment',
+        installment_number: installmentNumber,
+        reference_number: normalizedReference,
+        status: 'completed',
+      }).session(session).lean();
+      if (existing) throw createHttpError(409, 'A payment with this reference already exists for this installment number.');
+    }
+
+    const updatedAmountPaid = roundCurrency((row.amount_paid || 0) + amountToApply);
+    if (updatedAmountPaid >= roundCurrency(row.amount_due)) {
+      row.amount_paid = roundCurrency(row.amount_due);
+      row.status = 'paid';
+      row.paid_date = new Date();
+    } else {
+      row.amount_paid = updatedAmountPaid;
+      row.status = row.due_date < new Date() ? 'overdue' : 'partially_paid';
+    }
+    await row.save({ session });
+
+    const [payment] = await Payment.create([{
+      order_id: plan.order_id,
+      user_id: plan.user_id,
+      amount: amountToApply,
+      payment_method,
+      payment_type: 'installment',
+      reference_number: normalizedReference,
+      status: 'completed',
+      receipt_number: generateReceiptNumber(),
+      receipt_image_url: receipt_image_url.trim(),
+      installment_number: row.installment_number,
+      total_installments: plan.number_of_installments,
+    }], { session });
+
+    const remainingRows = await InstallmentSchedule.countDocuments({
+      installment_plan_id: plan._id,
+      status: { $ne: 'paid' },
+    }).session(session);
+
+    const linkedOrder = await Order.findById(plan.order_id).session(session);
+    assertOrderPayable(linkedOrder);
+
+    if (remainingRows === 0) {
+      plan.status = 'completed';
+      linkedOrder.status = 'completed';
+    } else {
+      plan.status = 'active';
+      linkedOrder.status = 'installment_active';
+    }
+    linkedOrder.payment_method = 'installment';
+
+    await plan.save({ session });
+    await linkedOrder.save({ session });
+    await session.commitTransaction();
+
+    res.status(201).json({
+      message: 'Installment payment recorded.',
+      payment: { ...payment.toObject(), id: payment._id },
+      schedule: { ...row.toObject(), id: row._id },
+    });
+  } catch (err) {
+    if (session.inTransaction()) await session.abortTransaction();
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    res.status(500).json({ error: 'Server error recording installment payment.' });
+  } finally {
+    await session.endSession();
+  }
+});
+
+// Get installment plan and schedule for an order
+router.get('/installments/:orderId', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.orderId).lean();
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+
+    const installment = await getPlanWithSchedule(order._id);
+    if (!installment) return res.status(404).json({ error: 'Installment plan not found for this order.' });
+
+    res.json({
+      order_id: order._id,
+      order_number: order.order_number,
+      installment_plan: installment,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error loading installment details.' });
   }
 });
 
