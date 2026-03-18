@@ -12,6 +12,7 @@ const statusConfig = {
   processing: { color: 'badge-info', label: 'Processing' },
   ready: { color: 'badge-success', label: 'Ready' },
   picked_up: { color: 'badge-success', label: 'Picked Up' },
+  in_transit: { color: 'badge-info', label: 'In Transit' },
   delivered: { color: 'badge-success', label: 'Delivered' },
   completed: { color: 'badge-success', label: 'Completed' },
   cancelled: { color: 'badge-danger', label: 'Cancelled' },
@@ -34,6 +35,18 @@ export default function Orders() {
       toast.error('Failed to load orders');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleReorder = async (e, orderId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const result = await api.reorderOrder(orderId);
+      const summary = `${result.added_count || 0} item(s) added` + ((result.skipped_count || 0) > 0 ? `, ${result.skipped_count} skipped.` : '.');
+      toast.success(summary);
+    } catch (err) {
+      toast.error(err.message);
     }
   };
 
@@ -75,8 +88,11 @@ export default function Orders() {
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
                   <span className="flex items-center gap-1"><FiPackage size={14} /> {order.items?.length || 0} items</span>
-                  <span className="flex items-center gap-1"><FiTruck size={14} /> {order.delivery_method === 'delivery' ? 'Delivery' : 'Pickup'}</span>
+                  <span className="flex items-center gap-1"><FiTruck size={14} /> {order.has_vehicle ? 'Pickup (Vehicle Policy)' : order.delivery_method === 'delivery' ? 'Delivery' : order.delivery_method === 'third_party' ? '3rd-Party Delivery' : 'Pickup'}</span>
                   <span className="flex items-center gap-1 ml-auto text-accent-600"><FiEye size={14} /> View Details</span>
+                </div>
+                <div className="mt-3">
+                  <button onClick={(e) => handleReorder(e, order.id)} className="btn-secondary btn-sm">Order Again</button>
                 </div>
               </Link>
             );

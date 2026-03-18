@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
-import { FiArrowLeft, FiCreditCard, FiFileText, FiRefreshCw } from 'react-icons/fi';
+import { FiArrowLeft, FiCreditCard, FiFileText, FiRefreshCw, FiTruck, FiCheckCircle } from 'react-icons/fi';
 
 const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price);
 
@@ -13,6 +13,7 @@ const statusConfig = {
   processing: { color: 'badge-info', label: 'Processing' },
   ready: { color: 'badge-success', label: 'Ready' },
   picked_up: { color: 'badge-success', label: 'Picked Up' },
+  in_transit: { color: 'badge-info', label: 'In Transit' },
   delivered: { color: 'badge-success', label: 'Delivered' },
   completed: { color: 'badge-success', label: 'Completed' },
   cancelled: { color: 'badge-danger', label: 'Cancelled' },
@@ -33,6 +34,8 @@ export default function OrderDetail() {
   const [showReturn, setShowReturn] = useState(false);
   const [processingReservation, setProcessingReservation] = useState(false);
   const [processingInstallmentCard, setProcessingInstallmentCard] = useState(false);
+  const [confirmingReceived, setConfirmingReceived] = useState(false);
+  const [reordering, setReordering] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount: '', payment_method: 'cash', payment_type: 'full' });
   const [returnForm, setReturnForm] = useState({ order_item_id: '', reason: '', request_type: 'return' });
 
@@ -99,10 +102,44 @@ export default function OrderDetail() {
     }
   };
 
+  const handleConfirmReceived = async () => {
+    try {
+      setConfirmingReceived(true);
+      await api.confirmOrderReceived(order.id);
+      toast.success('Thanks! We marked this order as received.');
+      await fetchOrder();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setConfirmingReceived(false);
+    }
+  };
+
+  const handleReorder = async () => {
+    try {
+      setReordering(true);
+      const result = await api.reorderOrder(order.id);
+      const summary = `${result.added_count || 0} item(s) added` + ((result.skipped_count || 0) > 0 ? `, ${result.skipped_count} skipped.` : '.');
+      toast.success(summary);
+      navigate('/cart');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setReordering(false);
+    }
+  };
+
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500"></div></div>;
   if (!order) return null;
 
   const sc = statusConfig[order.status] || { color: 'badge-gray', label: order.status };
+  const deliveryMethodLabel = order.has_vehicle
+    ? 'Pickup'
+    : order.delivery_method === 'third_party'
+    ? '3rd-Party Delivery'
+    : order.delivery_method === 'delivery'
+      ? 'Delivery'
+      : 'Pickup';
   const nextInstallmentRow = order.installment_plan?.schedule?.find((row) => row.status !== 'paid') || null;
   const nextInstallmentAmountDue = nextInstallmentRow
     ? Math.max(0, Number(nextInstallmentRow.amount_due || 0) - Number(nextInstallmentRow.amount_paid || 0))
@@ -136,14 +173,36 @@ export default function OrderDetail() {
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-6">
-          <div><span className="text-gray-500">Delivery</span><p className="font-medium capitalize">{order.delivery_method}</p></div>
+          <div><span className="text-gray-500">Delivery</span><p className="font-medium">{deliveryMethodLabel}</p></div>
           {order.delivery_address && <div className="col-span-2"><span className="text-gray-500">Address</span><p className="font-medium">{order.delivery_address}</p></div>}
+          {order.delivery_method === 'third_party' && (
+            <>
+              {order.delivery_contact_name && <div><span className="text-gray-500">Receiver</span><p className="font-medium">{order.delivery_contact_name}</p></div>}
+              {order.delivery_contact_phone && <div><span className="text-gray-500">Phone</span><p className="font-medium">{order.delivery_contact_phone}</p></div>}
+              {order.customer_delivery_platform && <div><span className="text-gray-500">Courier</span><p className="font-medium">{order.customer_delivery_platform}</p></div>}
+              {order.customer_delivery_reference && <div><span className="text-gray-500">Reference</span><p className="font-medium break-all">{order.customer_delivery_reference}</p></div>}
+            </>
+          )}
+          {order.customer_received_at && <div><span className="text-gray-500">Received At</span><p className="font-medium">{new Date(order.customer_received_at).toLocaleString()}</p></div>}
           {order.notes && <div className="col-span-2"><span className="text-gray-500">Notes</span><p className="font-medium">{order.notes}</p></div>}
         </div>
+
+        {order.delivery_method === 'third_party' && ['ready', 'picked_up', 'in_transit', 'delivered'].includes(order.status) && (
+          <div className="mb-6 rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm">
+            <p className="font-semibold text-indigo-800 flex items-center gap-2"><FiTruck /> Third-Party Delivery Tracking</p>
+            <p className="text-indigo-700 mt-1">
+              {order.status === 'ready' && 'Your order is ready for rider pickup.'}
+              {order.status === 'picked_up' && 'Your rider has picked up the order and is in transit.'}
+              {order.status === 'in_transit' && 'Your rider is currently in transit.'}
+              {order.status === 'delivered' && 'Marked as delivered. Please confirm once items are received.'}
+            </p>
+          </div>
+        )}
 
         {order.has_vehicle && (
           <div className="mb-6 rounded-lg border border-accent-200 bg-accent-50 p-4 text-sm">
             <p className="font-semibold text-accent-800">Vehicle Reservation</p>
+            <p className="text-accent-800 mt-1 font-medium">Delivery method policy: Vehicle orders are pickup only.</p>
             <p className="text-accent-700 mt-1">
               Reservation fee: <strong>{formatPrice(order.reservation_fee_total || 0)}</strong> • 
               {order.reservation_fee_paid ? ' Paid' : ' Unpaid'}
@@ -268,6 +327,22 @@ export default function OrderDetail() {
           )}
           {['completed', 'delivered', 'picked_up'].includes(order.status) && (
             <button onClick={() => setShowReturn(true)} className="btn-secondary btn-sm flex items-center gap-1"><FiRefreshCw size={14} /> Return / Replace</button>
+          )}
+          {order.status === 'delivered' && (
+            <button onClick={handleConfirmReceived} disabled={confirmingReceived} className="btn-success btn-sm flex items-center gap-1">
+              <FiCheckCircle size={14} /> {confirmingReceived ? 'Confirming...' : 'Confirm Received'}
+            </button>
+          )}
+          <button onClick={handleReorder} disabled={reordering} className="btn-secondary btn-sm">
+            {reordering ? 'Reordering...' : 'Order Again'}
+          </button>
+          {['completed', 'delivered'].includes(order.status) && (
+            <Link
+              to={`/feedback?order_id=${order.id}${order.items?.[0]?.product_id ? `&product_id=${order.items[0].product_id}` : ''}`}
+              className="btn-primary btn-sm"
+            >
+              Leave Feedback
+            </Link>
           )}
         </div>
       </div>

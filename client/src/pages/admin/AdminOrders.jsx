@@ -14,6 +14,7 @@ const statusConfig = {
   processing: { color: 'badge-info', label: 'Processing' },
   ready: { color: 'badge-success', label: 'Ready' },
   picked_up: { color: 'badge-success', label: 'Picked Up' },
+  in_transit: { color: 'badge-info', label: 'In Transit' },
   delivered: { color: 'badge-success', label: 'Delivered' },
   completed: { color: 'badge-success', label: 'Completed' },
   cancelled: { color: 'badge-danger', label: 'Cancelled' },
@@ -24,7 +25,7 @@ const statusConfig = {
   installment_defaulted: { color: 'badge-danger', label: 'Installment Defaulted' },
 };
 
-const statusFlow = ['pending', 'confirmed', 'processing', 'ready', 'picked_up', 'delivered', 'installment_active', 'installment_defaulted', 'completed', 'cancelled'];
+const statusFlow = ['pending', 'confirmed', 'processing', 'ready', 'picked_up', 'in_transit', 'delivered', 'installment_active', 'installment_defaulted', 'completed', 'cancelled'];
 
 export default function AdminOrders() {
   const [orders, setOrders] = useState([]);
@@ -258,7 +259,7 @@ export default function AdminOrders() {
                     <td className="px-4 py-3 font-medium">{formatPrice(order.total_amount)}</td>
                     <td className="px-4 py-3 text-green-600">{formatPrice(order.total_paid)}</td>
                     <td className="px-4 py-3">{order.remaining_balance > 0 ? <span className="text-amber-600 font-medium">{formatPrice(order.remaining_balance)}</span> : <span className="text-green-600">Paid</span>}</td>
-                    <td className="px-4 py-3 capitalize">{order.delivery_method}</td>
+                    <td className="px-4 py-3">{order.has_vehicle ? 'Pickup (Vehicle Policy)' : order.delivery_method === 'third_party' ? '3rd-Party Delivery' : order.delivery_method === 'delivery' ? 'Delivery' : 'Pickup'}</td>
                     <td className="px-4 py-3"><span className={`badge ${sc.color}`}>{sc.label}</span></td>
                     <td className="px-4 py-3 text-gray-500">{new Date(order.created_at).toLocaleDateString()}</td>
                     <td className="px-4 py-3">
@@ -266,6 +267,18 @@ export default function AdminOrders() {
                         <button onClick={() => setSelected(selected?.id === order.id ? null : order)} className="p-1.5 hover:bg-gray-100 rounded" title="Details"><FiEye size={14} /></button>
                         {order.status === 'pending' && <button onClick={() => updateStatus(order.id, 'confirmed')} className="p-1.5 hover:bg-green-50 text-green-600 rounded" title="Confirm"><FiCheck size={14} /></button>}
                         {order.status === 'pending' && <button onClick={() => updateStatus(order.id, 'cancelled')} className="p-1.5 hover:bg-red-50 text-red-600 rounded" title="Cancel"><FiX size={14} /></button>}
+                        {['confirmed', 'processing'].includes(order.status) && ['delivery', 'third_party'].includes(order.delivery_method) && (
+                          <button onClick={() => updateStatus(order.id, 'ready')} className="p-1.5 hover:bg-blue-50 text-blue-600 rounded" title="Mark Ready for Rider"><FiTruck size={14} /></button>
+                        )}
+                        {order.status === 'ready' && ['delivery', 'third_party'].includes(order.delivery_method) && (
+                          <button onClick={() => updateStatus(order.id, 'picked_up')} className="p-1.5 hover:bg-indigo-50 text-indigo-600 rounded" title="Mark Picked Up"><FiTruck size={14} /></button>
+                        )}
+                        {order.status === 'picked_up' && ['delivery', 'third_party'].includes(order.delivery_method) && (
+                          <button onClick={() => updateStatus(order.id, 'in_transit')} className="p-1.5 hover:bg-purple-50 text-purple-600 rounded" title="Mark In Transit"><FiTruck size={14} /></button>
+                        )}
+                        {order.status === 'in_transit' && ['delivery', 'third_party'].includes(order.delivery_method) && (
+                          <button onClick={() => updateStatus(order.id, 'delivered')} className="p-1.5 hover:bg-emerald-50 text-emerald-700 rounded" title="Mark Delivered"><FiCheck size={14} /></button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -284,7 +297,12 @@ export default function AdminOrders() {
             <h3 className="text-lg font-bold">Order {selected.order_number}</h3>
             <div className="text-sm space-y-2">
               <p><strong>Customer:</strong> {selected.first_name} {selected.last_name} ({selected.email})</p>
-              <p><strong>Delivery:</strong> {selected.delivery_method} {selected.delivery_address && `- ${selected.delivery_address}`}</p>
+              <p><strong>Delivery:</strong> {selected.has_vehicle ? 'Pickup (Vehicle Policy)' : selected.delivery_method === 'third_party' ? '3rd-Party Delivery' : selected.delivery_method === 'delivery' ? 'Delivery' : 'Pickup'} {selected.delivery_address && !selected.has_vehicle && `- ${selected.delivery_address}`}</p>
+              {selected.has_vehicle && <p><strong>Policy:</strong> Vehicle orders are pickup only.</p>}
+              {selected.delivery_contact_name && <p><strong>Receiver:</strong> {selected.delivery_contact_name} ({selected.delivery_contact_phone || 'No phone'})</p>}
+              {selected.customer_delivery_platform && <p><strong>Courier:</strong> {selected.customer_delivery_platform}</p>}
+              {selected.customer_delivery_reference && <p><strong>Courier Ref:</strong> {selected.customer_delivery_reference}</p>}
+              {selected.customer_received_at && <p><strong>Customer Received:</strong> {new Date(selected.customer_received_at).toLocaleString()}</p>}
               <p><strong>Total:</strong> {formatPrice(selected.total_amount)} | <strong>Paid:</strong> {formatPrice(selected.total_paid)}</p>
             </div>
             <div>
