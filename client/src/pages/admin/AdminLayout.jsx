@@ -68,7 +68,7 @@ export default function AdminLayout() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 lg:ml-64">
+      <main className="flex-1 min-w-0 lg:ml-64 overflow-x-hidden">
         <header className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-30 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button onClick={() => setSidebarOpen(true)} className="lg:hidden text-navy-900"><FiMenu size={22} /></button>
@@ -76,7 +76,7 @@ export default function AdminLayout() {
           </div>
           <p className="text-sm text-gray-500 hidden sm:block">{new Date().toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
         </header>
-        <div className="p-6">
+        <div className="p-6 max-w-full overflow-x-hidden">
           <Outlet />
         </div>
       </main>

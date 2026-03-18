@@ -170,6 +170,21 @@ function getUniqueCompletedPaymentTotal(payments = []) {
   return total;
 }
 
+async function autoCompleteDeliveredOrders() {
+  const graceCutoff = new Date(Date.now() - (3 * 24 * 60 * 60 * 1000));
+  await Order.updateMany(
+    {
+      status: 'delivered',
+      customer_received_at: null,
+      updated_at: { $lt: graceCutoff },
+    },
+    {
+      status: 'completed',
+      customer_received_at: new Date(),
+    }
+  );
+}
+
 // Dashboard stats
 router.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -225,6 +240,7 @@ router.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
 // All orders
 router.get('/orders', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    await autoCompleteDeliveredOrders();
     const { status } = req.query;
     const filter = status ? { status } : {};
     const orders = await Order.find(filter).sort({ created_at: -1 })
@@ -254,8 +270,26 @@ router.get('/orders', authenticateToken, requireAdmin, async (req, res) => {
 // Update order status
 router.put('/orders/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { status } = req.body;
-    const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true }).lean();
+    const {
+      status,
+      customer_delivery_platform,
+      customer_delivery_reference,
+      delivery_contact_name,
+      delivery_contact_phone,
+    } = req.body;
+
+    const updates = {};
+    if (status) updates.status = status;
+    if (customer_delivery_platform !== undefined) updates.customer_delivery_platform = customer_delivery_platform || null;
+    if (customer_delivery_reference !== undefined) updates.customer_delivery_reference = customer_delivery_reference || null;
+    if (delivery_contact_name !== undefined) updates.delivery_contact_name = delivery_contact_name || null;
+    if (delivery_contact_phone !== undefined) updates.delivery_contact_phone = delivery_contact_phone || null;
+
+    if (status === 'completed') {
+      updates.customer_received_at = new Date();
+    }
+
+    const order = await Order.findByIdAndUpdate(req.params.id, updates, { new: true }).lean();
     if (!order) return res.status(404).json({ error: 'Order not found.' });
     res.json({ ...order, id: order._id });
   } catch (err) {
@@ -747,40 +781,260 @@ router.get('/inventory/:id/logs', authenticateToken, requireAdmin, async (req, r
 // Sales report
 router.get('/sales', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { month, year } = req.query;
-    let dateFilter = {};
+    const {
+      month,
+      year,
+      status,
+      payment_method,
+      payment_type,
+      search,
+      cashbook_date,
+    } = req.query;
+
+    const filter = { order_id: { $ne: null } };
+
     if (month && year) {
-      const m = parseInt(month);
-      const y = parseInt(year);
-      dateFilter = { created_at: { $gte: new Date(y, m - 1, 1), $lt: new Date(y, m, 1) } };
+      const m = parseInt(month, 10);
+      const y = parseInt(year, 10);
+      filter.created_at = { $gte: new Date(y, m - 1, 1), $lt: new Date(y, m, 1) };
     }
 
-    const orders = await Order.find(dateFilter).sort({ created_at: -1 })
-      .populate('user_id', 'first_name last_name').lean();
+    if (status && status !== 'all') filter.status = status;
+    if (payment_method && payment_method !== 'all') filter.payment_method = payment_method;
+    if (payment_type && payment_type !== 'all') filter.payment_type = payment_type;
 
-    const result = [];
-    for (const order of orders) {
-      const items = await OrderItem.find({ order_id: order._id }).lean();
-      const payments = await Payment.find({ order_id: order._id, status: { $in: ['completed', 'pending'] } }).lean();
-      const paid_amount = getUniqueCompletedPaymentTotal(payments);
-      result.push({
-        id: order._id,
-        order_number: order.order_number,
-        created_at: order.created_at,
-        first_name: order.user_id?.first_name || 'Unknown',
-        last_name: order.user_id?.last_name || '',
-        total_amount: order.total_amount,
-        paid_amount,
-        remaining_balance: Math.max(0, (order.total_amount || 0) - paid_amount),
-        item_count: items.length,
-        payment_method: payments[0]?.payment_method || null,
-        delivery_method: order.delivery_method,
-        status: order.status,
-        notes: order.notes,
+    const payments = await Payment.find(filter)
+      .populate('order_id', 'order_number total_amount status delivery_method notes created_at')
+      .populate('user_id', 'first_name last_name email')
+      .sort({ created_at: -1 })
+      .lean();
+
+    let filteredPayments = payments;
+    const normalizedSearch = search ? String(search).trim().toLowerCase() : '';
+    if (normalizedSearch) {
+      filteredPayments = payments.filter(p => {
+        const orderNumber = p.order_id?.order_number || '';
+        const customerName = p.user_id ? `${p.user_id.first_name || ''} ${p.user_id.last_name || ''}`.trim() : '';
+        const refNumber = p.reference_number || '';
+        const receiptNumber = p.receipt_number || '';
+        return [orderNumber, customerName, refNumber, receiptNumber].some(v => String(v).toLowerCase().includes(normalizedSearch));
       });
     }
 
-    res.json(result);
+    const orderIdSet = new Set(filteredPayments.map(p => p.order_id?._id ? String(p.order_id._id) : String(p.order_id)).filter(Boolean));
+    const orderIds = [...orderIdSet];
+
+    let rows = [];
+    if (orderIds.length) {
+      const allOrderPayments = await Payment.find({ order_id: { $in: orderIds } })
+        .sort({ created_at: 1 })
+        .lean();
+
+      const byOrderAll = {};
+      for (const payment of allOrderPayments) {
+        const key = String(payment.order_id);
+        if (!byOrderAll[key]) byOrderAll[key] = [];
+        byOrderAll[key].push(payment);
+      }
+
+      const orderPaidMap = {};
+      Object.keys(byOrderAll).forEach(key => {
+        const completed = byOrderAll[key].filter(p => p.status === 'completed');
+        orderPaidMap[key] = getUniqueCompletedPaymentTotal(completed);
+      });
+
+      rows = filteredPayments.map(payment => {
+        const orderId = payment.order_id?._id ? String(payment.order_id._id) : String(payment.order_id);
+        const orderTotal = Number(payment.order_id?.total_amount || 0);
+        const orderPaidTotal = Number(orderPaidMap[orderId] || 0);
+        const remainingBalance = Math.max(0, orderTotal - orderPaidTotal);
+        const timeline = (byOrderAll[orderId] || []).map(p => ({
+          id: p._id,
+          created_at: p.created_at,
+          amount: p.amount,
+          payment_method: p.payment_method,
+          payment_type: p.payment_type,
+          status: p.status,
+          reference_number: p.reference_number,
+          receipt_number: p.receipt_number,
+        }));
+
+        return {
+          id: payment._id,
+          payment_date: payment.created_at,
+          order_id: orderId,
+          order_number: payment.order_id?.order_number || 'N/A',
+          customer_name: payment.user_id ? `${payment.user_id.first_name || ''} ${payment.user_id.last_name || ''}`.trim() || 'Unknown' : 'Unknown',
+          customer_email: payment.user_id?.email || null,
+          payment_type: payment.payment_type,
+          payment_method: payment.payment_method,
+          payment_status: payment.status,
+          reference_number: payment.reference_number,
+          receipt_number: payment.receipt_number,
+          amount_paid: Number(payment.amount || 0),
+          order_total: orderTotal,
+          order_paid_total: orderPaidTotal,
+          remaining_balance: remainingBalance,
+          order_status: payment.order_id?.status || 'pending',
+          delivery_method: payment.order_id?.delivery_method || 'pickup',
+          order_created_at: payment.order_id?.created_at || null,
+          order_notes: payment.order_id?.notes || null,
+          payment_timeline: timeline,
+        };
+      });
+    }
+
+    const salesCollected = rows
+      .filter(r => r.payment_status === 'completed')
+      .reduce((sum, row) => sum + row.amount_paid, 0);
+    const completedCount = rows.filter(r => r.payment_status === 'completed').length;
+    const failedOrRefundedCount = rows.filter(r => ['failed', 'refunded'].includes(r.payment_status)).length;
+    const averagePaymentValue = completedCount > 0 ? salesCollected / completedCount : 0;
+
+    const remainingByOrder = {};
+    rows.forEach(row => { remainingByOrder[row.order_id] = row.remaining_balance; });
+    const outstandingReceivables = Object.values(remainingByOrder).reduce((sum, value) => sum + Number(value || 0), 0);
+
+    const overdueInstallmentsCount = await InstallmentSchedule.countDocuments({
+      status: { $in: ['pending', 'partially_paid', 'overdue'] },
+      due_date: { $lt: new Date() },
+    });
+
+    // Receivables + aging buckets (lifetime open balances)
+    const receivableOrders = await Order.find({
+      status: { $nin: ['cancelled', 'returned'] },
+    }).populate('user_id', 'first_name last_name email').lean();
+
+    const receivableOrderIds = receivableOrders.map(o => o._id);
+    const receivablePayments = receivableOrderIds.length
+      ? await Payment.find({
+          status: 'completed',
+          order_id: { $in: receivableOrderIds },
+        }).sort({ created_at: -1 }).lean()
+      : [];
+
+    const paidByOrder = {};
+    const lastPaymentByOrder = {};
+    receivablePayments.forEach(p => {
+      const key = String(p.order_id);
+      if (!paidByOrder[key]) paidByOrder[key] = [];
+      paidByOrder[key].push(p);
+      if (!lastPaymentByOrder[key]) lastPaymentByOrder[key] = p.created_at;
+    });
+
+    const plans = receivableOrderIds.length
+      ? await InstallmentPlan.find({ order_id: { $in: receivableOrderIds } }).lean()
+      : [];
+    const planIds = plans.map(p => p._id);
+    const orderIdByPlanId = {};
+    plans.forEach(plan => { orderIdByPlanId[String(plan._id)] = String(plan.order_id); });
+
+    const schedules = planIds.length
+      ? await InstallmentSchedule.find({
+          installment_plan_id: { $in: planIds },
+          status: { $in: ['pending', 'partially_paid', 'overdue'] },
+        }).sort({ due_date: 1 }).lean()
+      : [];
+
+    const nextDueByOrder = {};
+    schedules.forEach(s => {
+      const orderId = orderIdByPlanId[String(s.installment_plan_id)];
+      if (!orderId) return;
+      const key = String(orderId);
+      if (!nextDueByOrder[key]) nextDueByOrder[key] = s;
+    });
+
+    const now = new Date();
+    const receivableRows = [];
+    const aging = { current: 0, bucket_1_7: 0, bucket_8_30: 0, bucket_31_plus: 0, total: 0 };
+
+    receivableOrders.forEach(order => {
+      const key = String(order._id);
+      const paidTotal = getUniqueCompletedPaymentTotal(paidByOrder[key] || []);
+      const total = Number(order.total_amount || 0);
+      const outstanding = Math.max(0, total - paidTotal);
+      if (outstanding <= 0) return;
+
+      const nextDue = nextDueByOrder[key]?.due_date || null;
+      const baselineDate = nextDue ? new Date(nextDue) : new Date(order.created_at);
+      const daysOverdue = Math.max(0, Math.floor((now - baselineDate) / (1000 * 60 * 60 * 24)));
+
+      if (daysOverdue === 0) aging.current += outstanding;
+      else if (daysOverdue <= 7) aging.bucket_1_7 += outstanding;
+      else if (daysOverdue <= 30) aging.bucket_8_30 += outstanding;
+      else aging.bucket_31_plus += outstanding;
+      aging.total += outstanding;
+
+      receivableRows.push({
+        order_id: order._id,
+        order_number: order.order_number,
+        customer_name: order.user_id ? `${order.user_id.first_name || ''} ${order.user_id.last_name || ''}`.trim() || 'Unknown' : 'Unknown',
+        customer_email: order.user_id?.email || null,
+        order_total: total,
+        paid_total: paidTotal,
+        outstanding,
+        next_due_date: nextDue,
+        days_overdue: daysOverdue,
+        order_status: order.status,
+        last_payment_date: lastPaymentByOrder[key] || null,
+      });
+    });
+
+    receivableRows.sort((a, b) => b.outstanding - a.outstanding);
+
+    // Daily cashbook snapshot
+    const cashbookBaseDate = cashbook_date ? new Date(cashbook_date) : new Date();
+    const startOfDay = new Date(cashbookBaseDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(cashbookBaseDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const cashbookPayments = await Payment.find({
+      status: 'completed',
+      order_id: { $ne: null },
+      created_at: { $gte: startOfDay, $lte: endOfDay },
+    }).lean();
+
+    const totalsByMethod = {};
+    let cashTotal = 0;
+    let digitalTotal = 0;
+    cashbookPayments.forEach(payment => {
+      const method = payment.payment_method || 'unknown';
+      totalsByMethod[method] = Number((totalsByMethod[method] || 0) + Number(payment.amount || 0));
+      if (method === 'cash') cashTotal += Number(payment.amount || 0);
+      else digitalTotal += Number(payment.amount || 0);
+    });
+
+    res.json({
+      summary: {
+        sales_collected: Number(salesCollected.toFixed(2)),
+        transactions_count: rows.length,
+        completed_count: completedCount,
+        outstanding_receivables: Number(outstandingReceivables.toFixed(2)),
+        overdue_installments_count: overdueInstallmentsCount,
+        failed_or_refunded_count: failedOrRefundedCount,
+        average_payment_value: Number(averagePaymentValue.toFixed(2)),
+      },
+      rows,
+      receivables: {
+        aging: {
+          current: Number(aging.current.toFixed(2)),
+          bucket_1_7: Number(aging.bucket_1_7.toFixed(2)),
+          bucket_8_30: Number(aging.bucket_8_30.toFixed(2)),
+          bucket_31_plus: Number(aging.bucket_31_plus.toFixed(2)),
+          total: Number(aging.total.toFixed(2)),
+        },
+        rows: receivableRows,
+      },
+      daily_cashbook: {
+        date: startOfDay,
+        transactions_count: cashbookPayments.length,
+        total_collections: Number((cashTotal + digitalTotal).toFixed(2)),
+        cash_total: Number(cashTotal.toFixed(2)),
+        digital_total: Number(digitalTotal.toFixed(2)),
+        totals_by_method: totalsByMethod,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
   }

@@ -72,6 +72,8 @@ export const api = {
   placeDirectOrder: (data) => apiRequest('/orders/direct', { method: 'POST', body: JSON.stringify(data) }),
   placeOrder: (data) => apiRequest('/orders', { method: 'POST', body: JSON.stringify(data) }),
   updateOrderStatus: (id, data) => apiRequest(`/orders/${id}/status`, { method: 'PUT', body: JSON.stringify(data) }),
+  confirmOrderReceived: (id) => apiRequest(`/orders/${id}/confirm-received`, { method: 'PUT' }),
+  reorderOrder: (id) => apiRequest(`/orders/${id}/reorder`, { method: 'POST' }),
 
   // Bookings
   getBookings: () => apiRequest('/bookings'),
@@ -120,7 +122,15 @@ export const api = {
   getCustomers: () => apiRequest('/admin/customers'),
   getInventory: () => apiRequest('/admin/inventory'),
   getInventoryLog: (productId) => apiRequest(`/admin/inventory/log${productId ? '?product_id=' + productId : ''}`),
-  getSales: (month, year) => apiRequest(`/admin/sales?month=${month}&year=${year}`),
+  getSales: (params = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '' && value !== 'all') {
+        query.set(key, value);
+      }
+    });
+    return apiRequest(`/admin/sales${query.toString() ? `?${query.toString()}` : ''}`);
+  },
   getMonthlyReport: (year) => apiRequest(`/admin/reports/monthly${year ? '?year=' + year : ''}`),
   getRevenueReport: () => apiRequest('/admin/reports/revenue'),
   uploadAdminPaymentReceipt: async (file) => {
