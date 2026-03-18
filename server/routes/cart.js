@@ -73,6 +73,13 @@ router.put('/:id', authenticateToken, async (req, res) => {
     const item = await CartItem.findOne({ _id: req.params.id, user_id: req.user.id });
     if (!item) return res.status(404).json({ error: 'Cart item not found.' });
 
+    const product = await Product.findById(item.product_id);
+    if (!product) return res.status(404).json({ error: 'Product no longer exists.' });
+    if (!isProductPurchasable(product)) return res.status(400).json({ error: 'Product is no longer available.' });
+    if (Number(quantity) > Number(product.stock_quantity || 0)) {
+      return res.status(400).json({ error: `Only ${product.stock_quantity || 0} item(s) available.` });
+    }
+
     item.quantity = quantity;
     await item.save();
     res.json({ ...item.toObject(), id: item._id });

@@ -8,6 +8,16 @@ const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency
 export default function Cart() {
   const { cart, updateQuantity, removeItem, clearCart, loading } = useCart();
 
+  const isItemUnavailable = (item) => {
+    const stock = Number(item.stock_quantity || 0);
+    if (item.type === 'vehicle') {
+      return stock <= 0;
+    }
+    return item.status !== 'available' || stock <= 0 || Number(item.quantity || 0) > stock;
+  };
+
+  const hasUnavailableItems = cart.items.some(isItemUnavailable);
+
   const handleUpdateQty = async (itemId, newQty) => {
     try { await updateQuantity(itemId, newQty); } catch (err) { toast.error(err.message); }
   };
@@ -40,12 +50,12 @@ export default function Cart() {
                 <div className="flex-1 min-w-0">
                   <Link to={`/products/${item.product_id}`} className="font-semibold text-gray-900 hover:text-accent-600 line-clamp-1">{item.name}</Link>
                   <p className="text-accent-600 font-bold mt-1">{formatPrice(item.price)}</p>
-                  {item.status === 'sold_out' && <p className="text-xs text-red-500 font-medium">Item no longer available</p>}
+                  {isItemUnavailable(item) && <p className="text-xs text-red-500 font-medium">Out of stock or no longer available</p>}
                   <div className="flex items-center gap-3 mt-2">
                     <div className="flex items-center border rounded-lg">
                       <button onClick={() => handleUpdateQty(item.id, item.quantity - 1)} className="p-1.5 hover:bg-gray-50"><FiMinus size={14} /></button>
                       <span className="px-3 text-sm font-medium">{item.quantity}</span>
-                      <button onClick={() => handleUpdateQty(item.id, item.quantity + 1)} className="p-1.5 hover:bg-gray-50"><FiPlus size={14} /></button>
+                      <button onClick={() => handleUpdateQty(item.id, item.quantity + 1)} disabled={Number(item.quantity || 0) >= Number(item.stock_quantity || 0)} className="p-1.5 hover:bg-gray-50 disabled:opacity-40"><FiPlus size={14} /></button>
                     </div>
                     <button onClick={() => handleRemove(item.id)} className="text-red-500 hover:text-red-700 p-1.5"><FiTrash2 size={16} /></button>
                   </div>
@@ -72,13 +82,24 @@ export default function Cart() {
                 </div>
               </div>
               <hr className="my-4" />
+              {hasUnavailableItems && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 mb-3">
+                  Some items are out of stock or unavailable. Remove or adjust them before checkout.
+                </div>
+              )}
               <div className="flex justify-between font-bold text-lg">
                 <span>Total</span>
                 <span className="text-accent-600">{formatPrice(cart.total)}</span>
               </div>
-              <Link to="/checkout" className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
-                Proceed to Checkout <FiArrowRight />
-              </Link>
+              {hasUnavailableItems ? (
+                <button disabled className="btn-primary w-full mt-4 flex items-center justify-center gap-2 opacity-60 cursor-not-allowed">
+                  Proceed to Checkout <FiArrowRight />
+                </button>
+              ) : (
+                <Link to="/checkout" className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
+                  Proceed to Checkout <FiArrowRight />
+                </Link>
+              )}
             </div>
           </div>
         </div>

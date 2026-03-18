@@ -1,15 +1,30 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import toast from 'react-hot-toast';
 import { FiStar, FiSend, FiMessageSquare } from 'react-icons/fi';
 
 export default function Feedback() {
+  const [searchParams] = useSearchParams();
   const [feedbackList, setFeedbackList] = useState([]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState({ product_id: '', rating: 5, comment: '', type: 'general' });
+  const [form, setForm] = useState({ product_id: '', order_id: '', rating: 5, comment: '', type: 'general' });
 
   useEffect(() => { fetchFeedback(); fetchProducts(); }, []);
+
+  useEffect(() => {
+    const queryOrderId = searchParams.get('order_id') || '';
+    const queryProductId = searchParams.get('product_id') || '';
+    if (!queryOrderId && !queryProductId) return;
+
+    setForm(prev => ({
+      ...prev,
+      product_id: queryProductId || prev.product_id,
+      order_id: queryOrderId || prev.order_id,
+      type: 'service_review',
+    }));
+  }, [searchParams]);
 
   const fetchFeedback = async () => {
     try { setFeedbackList(await api.getFeedback()); } catch {} finally { setLoading(false); }
@@ -22,9 +37,9 @@ export default function Feedback() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await api.submitFeedback({ ...form, product_id: form.product_id || null });
+      await api.submitFeedback({ ...form, product_id: form.product_id || null, order_id: form.order_id || null });
       toast.success('Feedback submitted!');
-      setForm({ product_id: '', rating: 5, comment: '', type: 'general' });
+      setForm({ product_id: '', order_id: '', rating: 5, comment: '', type: 'general' });
       fetchFeedback();
     } catch (err) { toast.error(err.message); }
   };
