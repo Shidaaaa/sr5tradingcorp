@@ -50,6 +50,72 @@ function isProductPurchasable(product) {
   return product?.status === 'available' && stock > 0;
 }
 
+function normalizeOptionalString(value) {
+  if (value === null || value === undefined) return null;
+  const trimmed = String(value).trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function buildDeliveryPayload(input = {}, options = {}) {
+  const hasVehicleOrder = Boolean(options.hasVehicleOrder);
+  const deliveryMethod = ['pickup', 'delivery', 'third_party'].includes(input.delivery_method)
+    ? input.delivery_method
+    : 'pickup';
+  const deliveryAddress = normalizeOptionalString(input.delivery_address);
+  const contactName = normalizeOptionalString(input.delivery_contact_name);
+  const contactPhone = normalizeOptionalString(input.delivery_contact_phone);
+  const customerDeliveryPlatform = normalizeOptionalString(input.customer_delivery_platform);
+  const customerDeliveryReference = normalizeOptionalString(input.customer_delivery_reference);
+
+  if (hasVehicleOrder && deliveryMethod !== 'pickup') {
+    throw new Error('Vehicle orders are currently pickup only.');
+  }
+
+  if ((deliveryMethod === 'delivery' || deliveryMethod === 'third_party') && !deliveryAddress) {
+    throw new Error('Delivery address is required for delivery orders.');
+  }
+
+  if (deliveryMethod === 'third_party' && (!contactName || !contactPhone)) {
+    throw new Error('Contact name and phone are required for third-party delivery.');
+  }
+
+  if (deliveryMethod === 'pickup') {
+    return {
+      delivery_method: 'pickup',
+      delivery_address: null,
+      delivery_contact_name: null,
+      delivery_contact_phone: null,
+      customer_delivery_platform: null,
+      customer_delivery_reference: null,
+    };
+  }
+
+  return {
+    delivery_method: deliveryMethod,
+    delivery_address: deliveryAddress,
+    delivery_contact_name: contactName,
+    delivery_contact_phone: contactPhone,
+    customer_delivery_platform: customerDeliveryPlatform,
+    customer_delivery_reference: customerDeliveryReference,
+  };
+}
+
+async function autoCompleteDeliveredOrdersForUser(userId) {
+  const graceCutoff = new Date(Date.now() - (3 * 24 * 60 * 60 * 1000));
+  await Order.updateMany(
+    {
+      user_id: userId,
+      status: 'delivered',
+      customer_received_at: null,
+      updated_at: { $lt: graceCutoff },
+    },
+    {
+      status: 'completed',
+      customer_received_at: new Date(),
+    }
+  );
+}
+
 async function releaseOrderInventory(orderId, userId) {
   const items = await OrderItem.find({ order_id: orderId }).lean();
   for (const item of items) {
@@ -167,6 +233,7 @@ async function enrichOrder(order) {
 // Get user orders
 router.get('/', authenticateToken, async (req, res) => {
   try {
+    await autoCompleteDeliveredOrdersForUser(req.user.id);
     const orders = await Order.find({ user_id: req.user.id }).sort({ created_at: -1 }).lean();
     for (const order of orders) {
       await enrichOrder(order);
@@ -180,6 +247,7 @@ router.get('/', authenticateToken, async (req, res) => {
 // Get single order
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
+    await autoCompleteDeliveredOrdersForUser(req.user.id);
     const order = await Order.findOne({ _id: req.params.id, user_id: req.user.id }).lean();
     if (!order) return res.status(404).json({ error: 'Order not found.' });
 
@@ -193,7 +261,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 // Create order directly from a product inquiry (without cart)
 router.post('/direct', authenticateToken, async (req, res) => {
   try {
-    const { product_id, quantity, delivery_method, delivery_address, notes } = req.body;
+    const { product_id, quantity, notes } = req.body;
     if (!product_id) return res.status(400).json({ error: 'Product ID is required.' });
 
     const orderQty = Math.max(1, Number(quantity || 1));
@@ -204,8 +272,15 @@ router.post('/direct', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: `Insufficient stock for ${product.name}.` });
     }
 
-    const total = Number(product.price || 0) * orderQty;
     const hasVehicle = product.type === 'vehicle';
+    let deliveryPayload;
+    try {
+      deliveryPayload = buildDeliveryPayload(req.body || {}, { hasVehicleOrder: hasVehicle });
+    } catch (deliveryErr) {
+      return res.status(400).json({ error: deliveryErr.message });
+    }
+
+    const total = Number(product.price || 0) * orderQty;
     const reservationFeeTotal = hasVehicle ? calculateReservationFee(product) * orderQty : 0;
     const reservationExpiresAt = getItemReservationExpiry(hasVehicle ? 'vehicle' : 'general');
 
@@ -218,8 +293,7 @@ router.post('/direct', authenticateToken, async (req, res) => {
       reservation_fee_total: reservationFeeTotal,
       reservation_fee_paid: reservationFeeTotal <= 0,
       reservation_expires_at: reservationExpiresAt,
-      delivery_method: delivery_method || 'pickup',
-      delivery_address: delivery_address || null,
+      ...deliveryPayload,
       notes: notes || null,
     });
 
@@ -260,7 +334,7 @@ router.post('/direct', authenticateToken, async (req, res) => {
 // Create order from cart
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const { delivery_method, delivery_address, notes } = req.body;
+    const { notes } = req.body;
 
     const cartItems = await CartItem.find({ user_id: req.user.id }).populate('product_id').lean();
     if (!cartItems.length) return res.status(400).json({ error: 'Cart is empty.' });
@@ -277,6 +351,14 @@ router.post('/', authenticateToken, async (req, res) => {
     let total = 0;
     let reservationFeeTotal = 0;
     const hasVehicle = cartItems.some(item => item.product_id?.type === 'vehicle');
+
+    let deliveryPayload;
+    try {
+      deliveryPayload = buildDeliveryPayload(req.body || {}, { hasVehicleOrder: hasVehicle });
+    } catch (deliveryErr) {
+      return res.status(400).json({ error: deliveryErr.message });
+    }
+
     for (const item of cartItems) {
       total += item.product_id.price * item.quantity;
       if (item.product_id.type === 'vehicle') {
@@ -295,8 +377,7 @@ router.post('/', authenticateToken, async (req, res) => {
       reservation_fee_total: reservationFeeTotal,
       reservation_fee_paid: reservationFeeTotal <= 0,
       reservation_expires_at: reservationExpiresAt,
-      delivery_method: delivery_method || 'pickup',
-      delivery_address: delivery_address || null,
+      ...deliveryPayload,
       notes: notes || null,
     });
 
@@ -339,6 +420,96 @@ router.post('/', authenticateToken, async (req, res) => {
     res.status(201).json({ ...order.toObject(), id: order._id });
   } catch (err) {
     res.status(500).json({ error: 'Server error creating order.' });
+  }
+});
+
+// Customer confirms they already received delivered items.
+router.put('/:id/confirm-received', authenticateToken, async (req, res) => {
+  try {
+    const order = await Order.findOne({ _id: req.params.id, user_id: req.user.id });
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    if (!['delivered', 'picked_up'].includes(order.status)) {
+      return res.status(400).json({ error: 'Only delivered orders can be confirmed as received.' });
+    }
+
+    order.status = 'completed';
+    order.customer_received_at = new Date();
+    await order.save();
+
+    res.json({ ...order.toObject(), id: order._id, message: 'Order marked as received.' });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error confirming delivery.' });
+  }
+});
+
+// Re-order non-vehicle items from an existing order into cart.
+router.post('/:id/reorder', authenticateToken, async (req, res) => {
+  try {
+    const order = await Order.findOne({ _id: req.params.id, user_id: req.user.id }).lean();
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+
+    const orderItems = await OrderItem.find({ order_id: order._id }).populate('product_id').lean();
+    if (!orderItems.length) return res.status(400).json({ error: 'No order items found to reorder.' });
+
+    const added = [];
+    const skipped = [];
+
+    for (const item of orderItems) {
+      const product = item.product_id;
+      if (!product) {
+        skipped.push({ item_name: 'Unknown item', reason: 'Item no longer exists.' });
+        continue;
+      }
+
+      if (product.type === 'vehicle') {
+        skipped.push({ item_name: product.name, reason: 'Vehicle items are inquiry-only and cannot be reordered to cart.' });
+        continue;
+      }
+
+      if (!isProductPurchasable(product)) {
+        skipped.push({ item_name: product.name, reason: 'Out of stock.' });
+        continue;
+      }
+
+      const availableStock = Number(product.stock_quantity || 0);
+      const desiredQty = Math.max(1, Number(item.quantity || 1));
+      const qtyToAdd = Math.min(desiredQty, availableStock);
+
+      if (qtyToAdd <= 0) {
+        skipped.push({ item_name: product.name, reason: 'Out of stock.' });
+        continue;
+      }
+
+      const existingCartItem = await CartItem.findOne({ user_id: req.user.id, product_id: product._id });
+      if (existingCartItem) {
+        const targetQty = Math.min(availableStock, Number(existingCartItem.quantity || 0) + qtyToAdd);
+        if (targetQty <= Number(existingCartItem.quantity || 0)) {
+          skipped.push({ item_name: product.name, reason: 'Cart already at maximum stock quantity.' });
+          continue;
+        }
+        existingCartItem.quantity = targetQty;
+        await existingCartItem.save();
+        added.push({ item_name: product.name, quantity: targetQty });
+        continue;
+      }
+
+      const created = await CartItem.create({ user_id: req.user.id, product_id: product._id, quantity: qtyToAdd });
+      added.push({ item_name: product.name, quantity: created.quantity });
+
+      if (qtyToAdd < desiredQty) {
+        skipped.push({ item_name: product.name, reason: `Only ${qtyToAdd} units available right now.` });
+      }
+    }
+
+    res.json({
+      message: 'Reorder completed.',
+      added_count: added.length,
+      skipped_count: skipped.length,
+      added,
+      skipped,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error reordering items.' });
   }
 });
 

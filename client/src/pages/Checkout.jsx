@@ -25,6 +25,10 @@ export default function Checkout() {
   const [form, setForm] = useState({
     delivery_method: 'pickup',
     delivery_address: user?.address || '',
+    delivery_contact_name: user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() : '',
+    delivery_contact_phone: user?.phone || '',
+    customer_delivery_platform: '',
+    customer_delivery_reference: '',
     payment_method: 'credit_card',
     notes: '',
   });
@@ -37,6 +41,14 @@ export default function Checkout() {
   const vehicleItems = checkoutItems.filter(item => item.type === 'vehicle');
   const hasVehicleOrder = vehicleItems.length > 0;
   const reservationFeeTotal = vehicleItems.reduce((sum, item) => sum + (calculateVehicleReservationFee(item) * (item.quantity || 1)), 0);
+
+  const isCheckoutItemUnavailable = (item) => {
+    const stock = Number(item.stock_quantity || 0);
+    if (item.type === 'vehicle') return stock <= 0;
+    return item.status !== 'available' || stock <= 0 || Number(item.quantity || 0) > stock;
+  };
+
+  const unavailableItems = inquiryItem ? [] : checkoutItems.filter(isCheckoutItemUnavailable);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,10 +100,27 @@ export default function Checkout() {
     }
   }, [hasVehicleOrder]);
 
+  useEffect(() => {
+    if (!hasVehicleOrder) return;
+    setForm(prev => ({
+      ...prev,
+      delivery_method: 'pickup',
+      delivery_address: '',
+      delivery_contact_name: '',
+      delivery_contact_phone: '',
+      customer_delivery_platform: '',
+      customer_delivery_reference: '',
+    }));
+  }, [hasVehicleOrder]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (checkoutItems.length === 0) {
       toast.error(inquiryProductId ? 'Inquiry item is missing.' : 'Cart is empty');
+      return;
+    }
+    if (unavailableItems.length > 0) {
+      toast.error('Some items are unavailable. Please review your cart before checkout.');
       return;
     }
     if (!Number.isFinite(checkoutTotal) || checkoutTotal <= 0) {
@@ -102,9 +131,21 @@ export default function Checkout() {
     let orderId = null;
     setLoading(true);
     try {
+      const orderPayload = hasVehicleOrder
+        ? {
+            ...form,
+            delivery_method: 'pickup',
+            delivery_address: '',
+            delivery_contact_name: '',
+            delivery_contact_phone: '',
+            customer_delivery_platform: '',
+            customer_delivery_reference: '',
+          }
+        : form;
+
       const data = inquiryItem
-        ? await api.placeDirectOrder({ ...form, product_id: inquiryItem.product_id, quantity: inquiryQty })
-        : await api.placeOrder(form);
+        ? await api.placeDirectOrder({ ...orderPayload, product_id: inquiryItem.product_id, quantity: inquiryQty })
+        : await api.placeOrder(orderPayload);
       orderId = data.id || data._id;
       if (!inquiryItem) await fetchCart();
 
@@ -147,22 +188,69 @@ export default function Checkout() {
           {/* Delivery Method */}
           <div className="card p-6">
             <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><FiTruck /> Delivery Method</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <label className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${form.delivery_method === 'pickup' ? 'border-accent-500 bg-accent-50' : 'border-gray-200'}`}>
-                <input type="radio" name="delivery_method" value="pickup" checked={form.delivery_method === 'pickup'} onChange={e => setForm({ ...form, delivery_method: e.target.value })} className="sr-only" />
-                <div className="font-semibold">Pickup</div>
-                <div className="text-sm text-gray-500">Pick up at SR-5 store</div>
-              </label>
-              <label className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${form.delivery_method === 'delivery' ? 'border-accent-500 bg-accent-50' : 'border-gray-200'}`}>
-                <input type="radio" name="delivery_method" value="delivery" checked={form.delivery_method === 'delivery'} onChange={e => setForm({ ...form, delivery_method: e.target.value })} className="sr-only" />
-                <div className="font-semibold">Delivery</div>
-                <div className="text-sm text-gray-500">Ship to your address</div>
-              </label>
-            </div>
-            {form.delivery_method === 'delivery' && (
-              <div className="mt-4">
+            {hasVehicleOrder ? (
+              <>
+                <div className="grid grid-cols-1">
+                  <label className="border-2 rounded-lg p-4 transition-all border-accent-500 bg-accent-50">
+                    <input type="radio" name="delivery_method" value="pickup" checked className="sr-only" readOnly />
+                    <div className="font-semibold">Pickup</div>
+                    <div className="text-sm text-gray-500">Vehicle orders are currently pickup only.</div>
+                  </label>
+                </div>
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
+                  For trucks, heavy equipment, and other vehicle units, delivery is currently unavailable. Please proceed with pickup.
+                </div>
+              </>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <label className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${form.delivery_method === 'pickup' ? 'border-accent-500 bg-accent-50' : 'border-gray-200'}`}>
+                  <input type="radio" name="delivery_method" value="pickup" checked={form.delivery_method === 'pickup'} onChange={e => setForm({ ...form, delivery_method: e.target.value })} className="sr-only" />
+                  <div className="font-semibold">Pickup</div>
+                  <div className="text-sm text-gray-500">Pick up at SR-5 store</div>
+                </label>
+                <label className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${form.delivery_method === 'delivery' ? 'border-accent-500 bg-accent-50' : 'border-gray-200'}`}>
+                  <input type="radio" name="delivery_method" value="delivery" checked={form.delivery_method === 'delivery'} onChange={e => setForm({ ...form, delivery_method: e.target.value })} className="sr-only" />
+                  <div className="font-semibold">Delivery</div>
+                  <div className="text-sm text-gray-500">Ship to your address</div>
+                </label>
+                <label className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${form.delivery_method === 'third_party' ? 'border-accent-500 bg-accent-50' : 'border-gray-200'}`}>
+                  <input type="radio" name="delivery_method" value="third_party" checked={form.delivery_method === 'third_party'} onChange={e => setForm({ ...form, delivery_method: e.target.value })} className="sr-only" />
+                  <div className="font-semibold">3rd-Party Delivery</div>
+                  <div className="text-sm text-gray-500">You book Lalamove/other rider</div>
+                </label>
+              </div>
+            )}
+
+            {!hasVehicleOrder && (form.delivery_method === 'delivery' || form.delivery_method === 'third_party') && (
+              <div className="mt-4 space-y-4">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Delivery Address</label>
                 <textarea value={form.delivery_address} onChange={e => setForm({ ...form, delivery_address: e.target.value })} className="input-field" rows={2} required />
+
+                {form.delivery_method === 'third_party' && (
+                  <>
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
+                      Rider booking is handled by customer (Lalamove/Grab/other). We will prepare your order and update status once picked up.
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Receiver Name</label>
+                        <input value={form.delivery_contact_name} onChange={e => setForm({ ...form, delivery_contact_name: e.target.value })} className="input-field" required />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Receiver Phone</label>
+                        <input value={form.delivery_contact_phone} onChange={e => setForm({ ...form, delivery_contact_phone: e.target.value })} className="input-field" required />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Courier Platform (Optional)</label>
+                        <input value={form.customer_delivery_platform} onChange={e => setForm({ ...form, customer_delivery_platform: e.target.value })} className="input-field" placeholder="Lalamove, Grab, etc." />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Booking Reference (Optional)</label>
+                        <input value={form.customer_delivery_reference} onChange={e => setForm({ ...form, customer_delivery_reference: e.target.value })} className="input-field" placeholder="Booking or tracking #" />
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -222,6 +310,11 @@ export default function Checkout() {
                 Inquiry checkout mode: this order is placed directly from product inquiry, not from cart.
               </div>
             )}
+            {unavailableItems.length > 0 && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 mb-4">
+                Unavailable items detected. Please go back to cart and update quantities.
+              </div>
+            )}
             <div className="space-y-3 mb-4">
               {checkoutItems.map(item => (
                 <div key={item.id} className="flex justify-between text-sm">
@@ -252,7 +345,7 @@ export default function Checkout() {
                 <span className="text-accent-600">{formatPrice(checkoutTotal)}</span>
               </div>
             )}
-            <button type="submit" disabled={loading || inquiryLoading || checkoutItems.length === 0 || !Number.isFinite(checkoutTotal) || checkoutTotal <= 0} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
+            <button type="submit" disabled={loading || inquiryLoading || unavailableItems.length > 0 || checkoutItems.length === 0 || !Number.isFinite(checkoutTotal) || checkoutTotal <= 0} className="btn-primary w-full mt-4 flex items-center justify-center gap-2">
               {loading
                 ? 'Processing...'
                 : inquiryLoading
