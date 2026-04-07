@@ -36,6 +36,7 @@ export default function OrderDetail() {
   const [processingInstallmentCard, setProcessingInstallmentCard] = useState(false);
   const [confirmingReceived, setConfirmingReceived] = useState(false);
   const [reordering, setReordering] = useState(false);
+  const [returnRequests, setReturnRequests] = useState([]);
   const [paymentForm, setPaymentForm] = useState({ amount: '', payment_method: 'cash', payment_type: 'full' });
   const [returnForm, setReturnForm] = useState({ order_item_id: '', reason: '', request_type: 'return' });
 
@@ -53,6 +54,19 @@ export default function OrderDetail() {
       setLoading(false);
     }
   };
+
+  const fetchReturnRequests = async () => {
+    try {
+      const data = await api.getReturns();
+      setReturnRequests(Array.isArray(data) ? data : []);
+    } catch {
+      setReturnRequests([]);
+    }
+  };
+
+  useEffect(() => {
+    fetchReturnRequests();
+  }, [id]);
 
   const handlePayment = async (e) => {
     e.preventDefault();
@@ -73,11 +87,23 @@ export default function OrderDetail() {
   const handleReturn = async (e) => {
     e.preventDefault();
     try {
-      await api.submitReturn({ order_id: order.id, ...returnForm, order_item_id: Number(returnForm.order_item_id) });
+      const selected = eligibleReturnItems.find(item => String(item.id) === String(returnForm.order_item_id));
+      if (!selected) {
+        toast.error('Please select a valid non-vehicle item.');
+        return;
+      }
+      await api.submitReturn({ order_id: order.id, ...returnForm, order_item_id: String(returnForm.order_item_id) });
       toast.success('Return request submitted');
       setShowReturn(false);
+      setReturnForm({ order_item_id: '', reason: '', request_type: 'return' });
       fetchOrder();
+      fetchReturnRequests();
     } catch (err) { toast.error(err.message); }
+  };
+
+  const openReturnForItem = (itemId) => {
+    setReturnForm(prev => ({ ...prev, order_item_id: String(itemId || '') }));
+    setShowReturn(true);
   };
 
   const handleReservationPayment = async () => {
@@ -153,6 +179,15 @@ export default function OrderDetail() {
     && nextInstallmentAmountDue > 0
     && !['cancelled', 'returned', 'replaced', 'completed'].includes(order.status)
   );
+
+  const canRequestReturn = ['completed', 'delivered', 'picked_up', 'return_requested'].includes(order.status);
+  const eligibleReturnItems = (order.items || []).filter(item => ['parts', 'tools'].includes(item.product_type));
+
+  const hasOpenRequestForItem = (itemId) => returnRequests.some((req) => (
+    String(req.order_id) === String(order.id)
+    && String(req.order_item_id) === String(itemId)
+    && ['pending', 'approved'].includes(req.status)
+  ));
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -270,15 +305,38 @@ export default function OrderDetail() {
         {/* Order Items */}
         <h3 className="font-bold mb-3">Items</h3>
         <div className="space-y-3 mb-6">
-          {order.items?.map(item => (
+          {order.items?.map(item => {
+            const itemHasOpenRequest = hasOpenRequestForItem(item.id);
+            const itemEligible = ['parts', 'tools'].includes(item.product_type);
+            return (
             <div key={item.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
               <div>
                 <p className="font-medium">{item.name}</p>
                 <p className="text-sm text-gray-500">{formatPrice(item.unit_price)} × {item.quantity}</p>
+                {canRequestReturn && itemEligible && (
+                  <div className="mt-2">
+                    {itemHasOpenRequest ? (
+                      <span className="text-xs text-amber-700 bg-amber-100 px-2 py-1 rounded-full">Return/Replacement Request Pending</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => openReturnForItem(item.id)}
+                        className="btn-secondary btn-sm flex items-center gap-1"
+                      >
+                        <FiRefreshCw size={12} /> Request Return / Replacement
+                      </button>
+                    )}
+                  </div>
+                )}
+                {canRequestReturn && !itemEligible && (
+                  <div className="mt-2">
+                    <span className="text-xs text-gray-600 bg-gray-200 px-2 py-1 rounded-full">Return/Replacement only for Parts & Accessories and Tools & Equipment</span>
+                  </div>
+                )}
               </div>
               <p className="font-bold">{formatPrice(item.subtotal)}</p>
             </div>
-          ))}
+          );})}
         </div>
 
         {/* Payments */}
@@ -325,7 +383,7 @@ export default function OrderDetail() {
           {order.remaining_balance > 0 && !['cancelled', 'returned'].includes(order.status) && (!order.has_vehicle || order.reservation_fee_paid) && order.payment_method !== 'installment' && (
             <button onClick={() => setShowPayment(true)} className="btn-primary btn-sm flex items-center gap-1"><FiCreditCard size={14} /> Make Payment</button>
           )}
-          {['completed', 'delivered', 'picked_up'].includes(order.status) && (
+          {['completed', 'delivered', 'picked_up'].includes(order.status) && eligibleReturnItems.length > 0 && (
             <button onClick={() => setShowReturn(true)} className="btn-secondary btn-sm flex items-center gap-1"><FiRefreshCw size={14} /> Return / Replace</button>
           )}
           {order.status === 'delivered' && (
@@ -391,7 +449,7 @@ export default function OrderDetail() {
               <label className="block text-sm font-medium mb-1">Select Item</label>
               <select value={returnForm.order_item_id} onChange={e => setReturnForm({ ...returnForm, order_item_id: e.target.value })} className="input-field" required>
                 <option value="">Choose item...</option>
-                {order.items?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                {eligibleReturnItems.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </div>
             <div>

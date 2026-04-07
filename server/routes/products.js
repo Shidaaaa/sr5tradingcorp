@@ -2,6 +2,9 @@ const express = require('express');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
 const InventoryLog = require('../models/InventoryLog');
+const User = require('../models/User');
+const Payment = require('../models/Payment');
+const Booking = require('../models/Booking');
 const { authenticateToken, requireAdmin, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -47,6 +50,26 @@ router.get('/meta/categories', async (req, res) => {
   try {
     const categories = await Category.find().sort({ name: 1 }).lean();
     res.json(categories.map(c => ({ ...c, id: c._id })));
+  } catch (err) {
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// Public homepage stats
+router.get('/meta/stats', async (req, res) => {
+  try {
+    const [users, transactions, appointments] = await Promise.all([
+      User.countDocuments({ role: 'customer' }),
+      Payment.countDocuments({ status: 'completed' }),
+      Booking.countDocuments({ status: { $in: ['pending', 'approved', 'completed'] } }),
+    ]);
+
+    res.json({
+      users,
+      transactions,
+      appointments,
+      locations: 3,
+    });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
   }

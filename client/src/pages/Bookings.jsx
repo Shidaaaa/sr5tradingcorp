@@ -2,17 +2,65 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import toast from 'react-hot-toast';
-import { FiCalendar, FiClock, FiPlus, FiMapPin, FiTruck, FiCheckCircle, FiXCircle, FiCreditCard, FiStar } from 'react-icons/fi';
+import { FiCalendar, FiClock, FiPlus, FiMapPin, FiTruck, FiCheckCircle, FiXCircle, FiCreditCard, FiStar, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
 import ReservationCountdown from '../components/ReservationCountdown';
+import { useAuth } from '../context/AuthContext';
 
 const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price);
 
 const formatDateInput = (date) => date.toISOString().split('T')[0];
 
+const normalizeDateKey = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value.slice(0, 10);
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return formatDateInput(parsed);
+};
+
+const toDisplayDate = (value) => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return 'Invalid date';
+  return parsed.toLocaleDateString();
+};
+
 const getBookingMaxDate = (productType) => {
   const maxDate = new Date();
   maxDate.setDate(maxDate.getDate() + (productType === 'vehicle' ? 30 : 90));
   return formatDateInput(maxDate);
+};
+
+const toMinutes = (value) => {
+  const [h, m] = String(value || '').split(':').map(Number);
+  return (h * 60) + m;
+};
+
+const toTimeLabel = (value) => {
+  const [h, m] = String(value || '').split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return value;
+  const date = new Date();
+  date.setHours(h, m, 0, 0);
+  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+};
+
+const buildTimeSlots = (openTime, closeTime, lunchStart, lunchEnd, durationMinutes = 120, stepMinutes = 30) => {
+  const openMin = toMinutes(openTime);
+  const closeMin = toMinutes(closeTime);
+  const lunchStartMin = toMinutes(lunchStart);
+  const lunchEndMin = toMinutes(lunchEnd);
+  const slots = [];
+
+  for (let start = openMin; start + durationMinutes <= closeMin; start += stepMinutes) {
+    const end = start + durationMinutes;
+    const overlapsLunch = start < lunchEndMin && end > lunchStartMin;
+    if (overlapsLunch) continue;
+
+    const hour = Math.floor(start / 60).toString().padStart(2, '0');
+    const minute = (start % 60).toString().padStart(2, '0');
+    slots.push(`${hour}:${minute}`);
+  }
+
+  return slots;
 };
 
 const statusConfig = {
@@ -24,11 +72,23 @@ const statusConfig = {
   cancelled: { color: 'badge-gray', label: 'Cancelled' },
 };
 
+const bookingTypeConfig = {
+  test_drive: { label: 'Test Drive', chip: 'bg-blue-100 text-blue-700' },
+  vehicle_viewing: { label: 'Viewing', chip: 'bg-violet-100 text-violet-700' },
+  service_appointment: { label: 'Service', chip: 'bg-emerald-100 text-emerald-700' },
+};
+
 export default function Bookings() {
+  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const [bookings, setBookings] = useState([]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [selectedDate, setSelectedDate] = useState(formatDateInput(new Date()));
   const [showForm, setShowForm] = useState(!!searchParams.get('product_id'));
   const [form, setForm] = useState({
     booking_type: 'test_drive',
@@ -42,13 +102,60 @@ export default function Bookings() {
   const [payingFee, setPayingFee] = useState(null);
   const [payMethod, setPayMethod] = useState('cash');
   const [processingOnline, setProcessingOnline] = useState(false);
+  const [availability, setAvailability] = useState({
+    daily_capacity: 5,
+    counts: {},
+    fully_booked_dates: [],
+    holidays: [],
+    store_open_time: '08:00',
+    store_close_time: '15:00',
+    lunch_start_time: '12:00',
+    lunch_end_time: '13:00',
+  });
 
   const selectedProduct = products.find(p => String(p.id) === String(form.product_id));
   const selectedProductType = selectedProduct?.type || (form.booking_type === 'test_drive' ? 'vehicle' : 'general');
   const minBookingDate = formatDateInput(new Date());
   const maxBookingDate = getBookingMaxDate(selectedProductType);
 
+  const monthLabel = calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const monthKey = `${calendarMonth.getFullYear()}-${String(calendarMonth.getMonth() + 1).padStart(2, '0')}`;
+  const monthStart = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+  const daysInMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0).getDate();
+  const monthOffset = monthStart.getDay();
+
+  const bookingsByDate = bookings.reduce((acc, booking) => {
+    const key = normalizeDateKey(booking.preferred_date);
+    if (!key) return acc;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(booking);
+    return acc;
+  }, {});
+
+  const selectedDateBookings = (bookingsByDate[selectedDate] || []).slice().sort((a, b) => String(a.preferred_time).localeCompare(String(b.preferred_time)));
+  const isSelectedDateHoliday = availability.holidays.includes(form.preferred_date);
+  const availableTimeSlots = buildTimeSlots(
+    availability.store_open_time,
+    availability.store_close_time,
+    availability.lunch_start_time,
+    availability.lunch_end_time
+  );
+
+  const calendarCells = [
+    ...Array.from({ length: monthOffset }, () => null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+
+  const selectedDateLabel = selectedDate ? toDisplayDate(selectedDate) : 'No date selected';
+
+  const jumpToToday = () => {
+    const today = new Date();
+    setCalendarMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    setSelectedDate(formatDateInput(today));
+  };
+
   useEffect(() => { fetchBookings(); fetchProducts(); }, []);
+  useEffect(() => { fetchAvailability(); }, [monthKey]);
 
   // Fetch reservation fee whenever product selection changes
   useEffect(() => {
@@ -59,15 +166,63 @@ export default function Bookings() {
   }, [form.product_id, products]);
 
   const fetchBookings = async () => {
-    try { setBookings(await api.getBookings()); } catch {} finally { setLoading(false); }
+    try {
+      const data = await api.getBookings();
+      const currentUserId = user?.id || user?._id;
+      const own = Array.isArray(data)
+        ? data.filter((booking) => !currentUserId || String(booking.user_id) === String(currentUserId))
+        : [];
+      setBookings(own);
+    } catch {
+      setBookings([]);
+    } finally { setLoading(false); }
   };
 
   const fetchProducts = async () => {
     try { setProducts(await api.getProducts()); } catch {}
   };
 
+  const fetchAvailability = async () => {
+    try {
+      const data = await api.getBookingAvailability(monthKey);
+      setAvailability({
+        daily_capacity: Number(data?.daily_capacity || 5),
+        counts: data?.counts || {},
+        fully_booked_dates: Array.isArray(data?.fully_booked_dates) ? data.fully_booked_dates : [],
+        holidays: Array.isArray(data?.holidays) ? data.holidays : [],
+        store_open_time: data?.store_open_time || '08:00',
+        store_close_time: data?.store_close_time || '15:00',
+        lunch_start_time: data?.lunch_start_time || '12:00',
+        lunch_end_time: data?.lunch_end_time || '13:00',
+      });
+    } catch {
+      setAvailability({
+        daily_capacity: 5,
+        counts: {},
+        fully_booked_dates: [],
+        holidays: [],
+        store_open_time: '08:00',
+        store_close_time: '15:00',
+        lunch_start_time: '12:00',
+        lunch_end_time: '13:00',
+      });
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (availability.fully_booked_dates.includes(form.preferred_date)) {
+      toast.error('Selected date is already fully booked. Please choose another day.');
+      return;
+    }
+    if (availability.holidays.includes(form.preferred_date)) {
+      toast.error('Selected date is a holiday. Please choose another day.');
+      return;
+    }
+    if (!availableTimeSlots.includes(form.preferred_time)) {
+      toast.error('Selected time is outside store hours or during lunch break.');
+      return;
+    }
     if (form.preferred_date && form.preferred_date > maxBookingDate) {
       toast.error(selectedProductType === 'vehicle'
         ? 'Vehicle bookings can only be scheduled up to 1 month in advance.'
@@ -147,16 +302,49 @@ export default function Bookings() {
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Preferred Date *</label>
-              <input type="date" value={form.preferred_date} onChange={e => setForm({ ...form, preferred_date: e.target.value })} className="input-field" min={minBookingDate} max={maxBookingDate} required />
+              <input
+                type="date"
+                value={form.preferred_date}
+                onChange={e => {
+                  const nextDate = e.target.value;
+                  const keepTime = availableTimeSlots.includes(form.preferred_time) ? form.preferred_time : '';
+                  setForm({ ...form, preferred_date: nextDate, preferred_time: keepTime });
+                }}
+                className="input-field"
+                min={minBookingDate}
+                max={maxBookingDate}
+                required
+              />
               <p className="text-xs text-gray-500 mt-1">
                 {selectedProductType === 'vehicle'
                   ? 'Vehicle bookings can be scheduled up to 1 month ahead.'
                   : 'Tools, parts, and other item bookings can be scheduled up to 3 months ahead.'}
               </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Store hours: {toTimeLabel(availability.store_open_time)} to {toTimeLabel(availability.store_close_time)} (lunch break {toTimeLabel(availability.lunch_start_time)} to {toTimeLabel(availability.lunch_end_time)}).
+              </p>
+              {form.preferred_date && availability.fully_booked_dates.includes(form.preferred_date) && (
+                <p className="text-xs text-red-600 mt-1">This date is fully booked.</p>
+              )}
+              {form.preferred_date && isSelectedDateHoliday && (
+                <p className="text-xs text-red-600 mt-1">This date is a holiday and cannot be booked.</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Preferred Time *</label>
-              <input type="time" value={form.preferred_time} onChange={e => setForm({ ...form, preferred_time: e.target.value })} className="input-field" required />
+              <select
+                value={form.preferred_time}
+                onChange={e => setForm({ ...form, preferred_time: e.target.value })}
+                className="input-field"
+                required
+                disabled={isSelectedDateHoliday}
+              >
+                <option value="">Select time...</option>
+                {availableTimeSlots.map((slot) => (
+                  <option key={slot} value={slot}>{toTimeLabel(slot)}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">Only available store-hour slots are shown. Lunch-time slots are excluded.</p>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">How will you receive the item?</label>
@@ -264,6 +452,150 @@ export default function Bookings() {
         </div>
       )}
 
+      {/* Booking Calendar */}
+      <div className="card p-6 mb-6">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <h3 className="text-lg font-bold text-navy-900">Booking Calendar</h3>
+            <p className="text-sm text-gray-500">Select a date to view all appointments for that day.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={jumpToToday}
+              className="px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-xs font-semibold text-gray-600"
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))}
+              className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600"
+              aria-label="Previous month"
+            >
+              <FiChevronLeft size={16} />
+            </button>
+            <p className="min-w-[150px] text-center text-sm font-semibold text-navy-900">{monthLabel}</p>
+            <button
+              type="button"
+              onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))}
+              className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600"
+              aria-label="Next month"
+            >
+              <FiChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-7 gap-2 text-center text-xs font-semibold text-gray-500 mb-2">
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+            <div key={day} className="py-1">{day}</div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-7 gap-2">
+          {calendarCells.map((day, idx) => {
+            if (!day) return <div key={`empty-${idx}`} className="h-20 rounded-lg bg-gray-50 border border-gray-100" />;
+
+            const dateKey = `${calendarMonth.getFullYear()}-${String(calendarMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const dayBookings = bookingsByDate[dateKey] || [];
+            const isSelected = selectedDate === dateKey;
+            const isToday = dateKey === formatDateInput(new Date());
+            const isFullyBooked = availability.fully_booked_dates.includes(dateKey);
+            const isHoliday = availability.holidays.includes(dateKey);
+            const isUnavailable = isFullyBooked || isHoliday;
+            const dayCount = Number(availability.counts?.[dateKey] || 0);
+
+            return (
+              <button
+                key={dateKey}
+                type="button"
+                disabled={isUnavailable}
+                onClick={() => setSelectedDate(dateKey)}
+                className={`h-20 rounded-lg border p-2 text-left transition-colors ${isSelected ? 'border-accent-500 bg-accent-50' : 'border-gray-200 hover:bg-gray-50'} ${isToday ? 'ring-1 ring-navy-300' : ''} ${isUnavailable ? 'bg-gray-200 border-gray-300 text-gray-400 cursor-not-allowed hover:bg-gray-200' : ''}`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`text-sm font-semibold ${isSelected ? 'text-accent-700' : 'text-gray-700'}`}>{day}</span>
+                  {(dayBookings.length > 0 || dayCount > 0) && (
+                    <span className="text-[10px] bg-navy-900 text-white px-1.5 py-0.5 rounded-full">
+                      {Math.max(dayBookings.length, dayCount)}
+                    </span>
+                  )}
+                </div>
+                {isHoliday && (
+                  <div className="mt-2">
+                    <p className="text-[11px] text-gray-500 font-medium">Holiday</p>
+                  </div>
+                )}
+                {isFullyBooked && !isHoliday && (
+                  <div className="mt-2">
+                    <p className="text-[11px] text-gray-500 font-medium">Fully booked</p>
+                  </div>
+                )}
+                {!isUnavailable && dayBookings.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {dayBookings.slice(0, 2).map((b) => (
+                      <p key={b.id} className="text-[11px] truncate">
+                        <span className={`inline-flex items-center rounded px-1.5 py-0.5 mr-1 font-medium ${bookingTypeConfig[b.booking_type]?.chip || 'bg-gray-100 text-gray-700'}`}>
+                          {bookingTypeConfig[b.booking_type]?.label || b.booking_type.replace(/_/g, ' ')}
+                        </span>
+                        <span className="text-gray-600">{b.preferred_time}</span>
+                      </p>
+                    ))}
+                    {dayBookings.length > 2 && <p className="text-[11px] text-gray-500">+{dayBookings.length - 2} more</p>}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-5 border-t border-gray-200 pt-4">
+          <div className="flex items-center gap-2 mb-2">
+            <FiCalendar size={16} className="text-navy-700" />
+            <h4 className="font-semibold text-navy-900">Appointments on {selectedDateLabel}</h4>
+          </div>
+
+          <div className="flex flex-wrap gap-2 mb-3">
+            {Object.entries(bookingTypeConfig).map(([key, value]) => (
+              <span key={key} className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${value.chip}`}>
+                {value.label}
+              </span>
+            ))}
+            <span className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium bg-gray-200 text-gray-700">
+              Fully booked day ({availability.daily_capacity}/day)
+            </span>
+            <span className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium bg-orange-100 text-orange-700">
+              Holiday (unavailable)
+            </span>
+          </div>
+
+          {selectedDateBookings.length === 0 ? (
+            <p className="text-sm text-gray-500">No appointments on this date.</p>
+          ) : (
+            <div className="space-y-2">
+              {selectedDateBookings.map((booking) => {
+                const sc = statusConfig[booking.status] || { color: 'badge-gray', label: booking.status };
+                const typeMeta = bookingTypeConfig[booking.booking_type] || { label: booking.booking_type.replace(/_/g, ' '), chip: 'bg-gray-100 text-gray-700' };
+                return (
+                  <div key={`selected-${booking.id}`} className="rounded-lg border border-gray-200 p-3 bg-gray-50">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-medium text-gray-900 flex items-center gap-2">
+                        <span>{booking.preferred_time}</span>
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${typeMeta.chip}`}>{typeMeta.label}</span>
+                      </p>
+                      <span className={`badge ${sc.color}`}>{sc.label}</span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">{booking.product_name || 'No product selected'}</p>
+                    {booking.notes && <p className="text-xs text-gray-500 mt-1">Note: {booking.notes}</p>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Bookings List */}
       {loading ? (
         <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500"></div></div>
@@ -307,7 +639,7 @@ export default function Bookings() {
                   )}
                   <div>
                     <span className="text-gray-500">Date</span>
-                    <p className="font-medium flex items-center gap-1"><FiCalendar size={14} /> {new Date(booking.preferred_date).toLocaleDateString()}</p>
+                    <p className="font-medium flex items-center gap-1"><FiCalendar size={14} /> {toDisplayDate(booking.preferred_date)}</p>
                   </div>
                   <div>
                     <span className="text-gray-500">Time</span>

@@ -1,8 +1,9 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useCart } from '../../context/CartContext';
-import { FiShoppingCart, FiUser, FiMenu, FiX, FiLogOut, FiPackage, FiCalendar, FiMessageSquare, FiSettings, FiChevronDown, FiTruck, FiTool } from 'react-icons/fi';
+import { FiShoppingCart, FiUser, FiMenu, FiX, FiLogOut, FiPackage, FiCalendar, FiMessageSquare, FiSettings, FiChevronDown } from 'react-icons/fi';
 import { useState, useRef, useEffect } from 'react';
+import { api } from '../../api';
 
 export default function Navbar() {
   const { user, logout } = useAuth();
@@ -11,6 +12,7 @@ export default function Navbar() {
   const [mobileMenu, setMobileMenu] = useState(false);
   const [userMenu, setUserMenu] = useState(false);
   const [browseMenu, setBrowseMenu] = useState(false);
+  const [categories, setCategories] = useState([]);
   const browseRef = useRef(null);
   const userRef = useRef(null);
 
@@ -21,6 +23,19 @@ export default function Navbar() {
     };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const data = await api.getCategories();
+        setCategories(data);
+      } catch {
+        setCategories([]);
+      }
+    };
+
+    fetchCategories();
   }, []);
 
   const handleLogout = () => {
@@ -61,25 +76,19 @@ export default function Navbar() {
               </button>
               {browseMenu && (
                 <div className="absolute top-full left-0 mt-1 w-52 bg-navy-800 rounded-xl shadow-xl border border-navy-700 py-2 animate-slide-down">
-                  <Link to="/browse/trucks" onClick={() => setBrowseMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white transition-colors">
-                    <FiTruck size={16} /> Trucks
-                  </Link>
-                  <Link to="/browse/tractors" onClick={() => setBrowseMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white transition-colors">
-                    <FiTruck size={16} /> Tractors
-                  </Link>
-                  <Link to="/browse/vans" onClick={() => setBrowseMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white transition-colors">
-                    <FiTruck size={16} /> Vans
-                  </Link>
-                  <Link to="/browse/other-units" onClick={() => setBrowseMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white transition-colors">
-                    <FiTruck size={16} /> Other Units
-                  </Link>
-                  <hr className="border-navy-700 my-1" />
                   <Link to="/products" onClick={() => setBrowseMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white transition-colors">
-                    <FiTool size={16} /> Parts & Accessories
+                    <FiPackage size={16} /> All Categories
                   </Link>
-                  <Link to="/products" onClick={() => setBrowseMenu(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-accent-400 hover:bg-navy-700 hover:text-accent-300 transition-colors font-medium">
-                    <FiPackage size={16} /> View All Products
-                  </Link>
+                  {categories.map((category) => (
+                    <Link
+                      key={category.id}
+                      to={`/products?category=${category.id}`}
+                      onClick={() => setBrowseMenu(false)}
+                      className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-navy-700 hover:text-white transition-colors"
+                    >
+                      <FiPackage size={16} /> {category.name}
+                    </Link>
+                  ))}
                 </div>
               )}
             </div>

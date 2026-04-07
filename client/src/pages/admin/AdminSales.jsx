@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '../../api';
-import { FiFilter, FiEye, FiSearch, FiDownload, FiCreditCard, FiClock, FiBookOpen } from 'react-icons/fi';
+import { FiFilter, FiEye, FiSearch, FiDownload, FiCreditCard, FiClock, FiBookOpen, FiPackage } from 'react-icons/fi';
 import Pagination from '../../components/Pagination';
 
 const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price || 0);
@@ -11,6 +11,13 @@ const toDateInputValue = (date) => {
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const toMonthInputValue = (date) => {
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
 };
 
 const statusBadgeClass = {
@@ -53,9 +60,13 @@ function downloadCsv(filename, headers, rows) {
 }
 
 export default function AdminSales() {
+  const currentMonthValue = toMonthInputValue(new Date());
   const [salesData, setSalesData] = useState({ summary: null, rows: [], receivables: null, daily_cashbook: null });
+  const [soldProductsData, setSoldProductsData] = useState({ summary: null, rows: [], month: currentMonthValue });
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('transactions');
+  const [soldProductsMonth, setSoldProductsMonth] = useState(currentMonthValue);
+  const [soldProductsLoading, setSoldProductsLoading] = useState(false);
   const [filters, setFilters] = useState({
     month: new Date().getMonth() + 1,
     year: new Date().getFullYear(),
@@ -71,6 +82,7 @@ export default function AdminSales() {
   const [receivablesPage, setReceivablesPage] = useState(1);
 
   useEffect(() => { fetchSales(); }, [filters]);
+  useEffect(() => { fetchSoldProducts(); }, [soldProductsMonth]);
 
   useEffect(() => {
     setTransactionsPage(1);
@@ -91,6 +103,26 @@ export default function AdminSales() {
       setSalesData({ summary: null, rows: [], receivables: null, daily_cashbook: null });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchSoldProducts = async () => {
+    setSoldProductsLoading(true);
+    try {
+      const data = await api.getSoldProductsReport(soldProductsMonth);
+      setSoldProductsData({
+        summary: data?.summary || { orders_count: 0, products_count: 0, units_sold: 0, revenue: 0 },
+        rows: Array.isArray(data?.rows) ? data.rows : [],
+        month: data?.month || soldProductsMonth,
+      });
+    } catch {
+      setSoldProductsData({
+        summary: { orders_count: 0, products_count: 0, units_sold: 0, revenue: 0 },
+        rows: [],
+        month: soldProductsMonth,
+      });
+    } finally {
+      setSoldProductsLoading(false);
     }
   };
 
@@ -176,6 +208,23 @@ export default function AdminSales() {
     );
   };
 
+  const exportSoldProducts = () => {
+    const rows = (soldProductsData.rows || []).map(row => ([
+      row.product_name,
+      row.category_name,
+      row.product_type,
+      row.total_quantity,
+      row.total_revenue,
+      row.orders_count,
+    ]));
+
+    downloadCsv(
+      `sold-products-${soldProductsData.month || soldProductsMonth}.csv`,
+      ['Product Name', 'Category', 'Type', 'Units Sold', 'Revenue', 'Orders Count'],
+      rows
+    );
+  };
+
   return (
     <div className="w-full min-w-0 overflow-x-hidden">
       <h1 className="text-2xl font-bold text-navy-900 mb-6">Sales Management</h1>
@@ -240,11 +289,13 @@ export default function AdminSales() {
           <button onClick={() => setActiveTab('transactions')} className={`px-3 py-2 text-sm rounded ${activeTab === 'transactions' ? 'bg-navy-900 text-white' : 'text-gray-600'}`}>Transactions</button>
           <button onClick={() => setActiveTab('receivables')} className={`px-3 py-2 text-sm rounded ${activeTab === 'receivables' ? 'bg-navy-900 text-white' : 'text-gray-600'}`}>Receivables</button>
           <button onClick={() => setActiveTab('cashbook')} className={`px-3 py-2 text-sm rounded ${activeTab === 'cashbook' ? 'bg-navy-900 text-white' : 'text-gray-600'}`}>Daily Cashbook</button>
+          <button onClick={() => setActiveTab('sold_products')} className={`px-3 py-2 text-sm rounded ${activeTab === 'sold_products' ? 'bg-navy-900 text-white' : 'text-gray-600'}`}>Sold Products</button>
         </div>
         <div className="flex items-center gap-2">
           {activeTab === 'transactions' && <button onClick={exportTransactions} className="btn-secondary btn-sm flex items-center gap-1"><FiDownload size={14} /> Export Transactions</button>}
           {activeTab === 'receivables' && <button onClick={exportReceivables} className="btn-secondary btn-sm flex items-center gap-1"><FiDownload size={14} /> Export Receivables</button>}
           {activeTab === 'cashbook' && <button onClick={exportCashbook} className="btn-secondary btn-sm flex items-center gap-1"><FiDownload size={14} /> Export Cashbook</button>}
+          {activeTab === 'sold_products' && <button onClick={exportSoldProducts} className="btn-secondary btn-sm flex items-center gap-1"><FiDownload size={14} /> Export Sold Products</button>}
         </div>
       </div>
 
@@ -414,6 +465,63 @@ export default function AdminSales() {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'sold_products' && (
+            <div className="space-y-4">
+              <div className="card">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 text-sm text-gray-600"><FiPackage /> Sold Products Month</div>
+                  <input
+                    type="month"
+                    value={soldProductsMonth}
+                    onChange={e => setSoldProductsMonth(e.target.value || currentMonthValue)}
+                    className="input-field w-auto"
+                  />
+                </div>
+              </div>
+
+              {soldProductsLoading ? (
+                <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-accent-500"></div></div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="stat-card"><p className="text-sm text-gray-500">Orders with Sold Items</p><p className="text-2xl font-bold text-navy-900">{soldProductsData.summary?.orders_count || 0}</p></div>
+                    <div className="stat-card"><p className="text-sm text-gray-500">Products Sold</p><p className="text-2xl font-bold text-blue-600">{soldProductsData.summary?.products_count || 0}</p></div>
+                    <div className="stat-card"><p className="text-sm text-gray-500">Units Sold</p><p className="text-2xl font-bold text-emerald-600">{soldProductsData.summary?.units_sold || 0}</p></div>
+                    <div className="stat-card"><p className="text-sm text-gray-500">Revenue from Sold Products</p><p className="text-2xl font-bold text-accent-600">{formatPrice(soldProductsData.summary?.revenue || 0)}</p></div>
+                  </div>
+
+                  <div className="table-container w-full max-w-full">
+                    <div className="w-full max-w-full overflow-hidden">
+                      <table className="w-full table-fixed text-sm">
+                        <thead><tr className="bg-gray-50 text-left">
+                          <th className="px-4 py-3">Product</th>
+                          <th className="px-4 py-3">Category</th>
+                          <th className="px-4 py-3">Type</th>
+                          <th className="px-4 py-3">Units Sold</th>
+                          <th className="px-4 py-3">Revenue</th>
+                          <th className="px-4 py-3">Orders</th>
+                        </tr></thead>
+                        <tbody>
+                          {(soldProductsData.rows || []).map(row => (
+                            <tr key={String(row.product_id)} className="border-t border-gray-100 hover:bg-gray-50">
+                              <td className="px-4 py-3 font-medium break-words">{row.product_name}</td>
+                              <td className="px-4 py-3 text-gray-600 break-words">{row.category_name}</td>
+                              <td className="px-4 py-3 capitalize">{row.product_type}</td>
+                              <td className="px-4 py-3 font-semibold text-emerald-700">{row.total_quantity}</td>
+                              <td className="px-4 py-3 font-semibold">{formatPrice(row.total_revenue)}</td>
+                              <td className="px-4 py-3">{row.orders_count}</td>
+                            </tr>
+                          ))}
+                          {(soldProductsData.rows || []).length === 0 && <tr><td colSpan="6" className="px-4 py-10 text-center text-gray-400">No sold products found for the selected month.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </>

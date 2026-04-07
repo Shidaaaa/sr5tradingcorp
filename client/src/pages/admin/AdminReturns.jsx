@@ -1,10 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { api } from '../../api';
 import toast from 'react-hot-toast';
-import { FiRotateCcw, FiCheck, FiX, FiSearch } from 'react-icons/fi';
+import { FiRotateCcw, FiCheck, FiX, FiSearch, FiPackage } from 'react-icons/fi';
 import Pagination from '../../components/Pagination';
-
-const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price);
 
 export default function AdminReturns() {
   const [returns, setReturns] = useState([]);
@@ -87,7 +85,7 @@ export default function AdminReturns() {
               <div>
                 <div className="flex items-center gap-3 mb-1">
                   <span className="font-medium">{r.first_name} {r.last_name}</span>
-                  <span className={`badge ${r.type === 'return' ? 'badge-warning' : 'badge-info'}`}>{r.type}</span>
+                  <span className={`badge ${r.type === 'return' ? 'badge-warning' : 'badge-info'}`}>{r.type === 'replacement' ? 'Replacement' : 'Return'}</span>
                   <span className={`badge ${r.status === 'pending' ? 'badge-warning' : r.status === 'approved' || r.status === 'completed' ? 'badge-success' : 'badge-danger'}`}>{r.status}</span>
                 </div>
                 <p className="text-sm text-gray-500">Order: {r.order_number} • Product: {r.product_name} (x{r.quantity})</p>
@@ -109,6 +107,13 @@ export default function AdminReturns() {
                 <input type="text" value={adminNotes[r.id] || ''} onChange={e => setAdminNotes(prev => ({ ...prev, [r.id]: e.target.value }))} placeholder="Admin notes (optional)" className="input-field flex-1" />
                 <button onClick={() => handleReturn(r.id, 'approved')} className="btn-success btn-sm flex items-center gap-1"><FiCheck size={14} /> Approve</button>
                 <button onClick={() => handleReturn(r.id, 'rejected')} className="btn-danger btn-sm flex items-center gap-1"><FiX size={14} /> Reject</button>
+              </div>
+            )}
+
+            {r.status === 'approved' && (
+              <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
+                <input type="text" value={adminNotes[r.id] || ''} onChange={e => setAdminNotes(prev => ({ ...prev, [r.id]: e.target.value }))} placeholder="Completion notes (optional)" className="input-field flex-1" />
+                <button onClick={() => handleReturn(r.id, 'completed')} className="btn-primary btn-sm flex items-center gap-1"><FiPackage size={14} /> Mark Completed</button>
               </div>
             )}
           </div>

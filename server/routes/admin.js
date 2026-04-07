@@ -191,7 +191,7 @@ router.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const [totalProducts, totalOrders, pendingOrders, completedOrders, totalCustomers, totalBookings, pendingBookings, pendingFeedback, pendingReturns, soldOutProducts, lowStockProducts] = await Promise.all([
+    const [totalProducts, totalOrders, pendingOrders, completedOrders, totalCustomers, totalBookings, pendingBookings, pendingFeedback, pendingReturns, soldOutProducts, lowStockProducts, totalTransactions, monthlyTransactions] = await Promise.all([
       Product.countDocuments(),
       Order.countDocuments(),
       Order.countDocuments({ status: 'pending' }),
@@ -203,6 +203,8 @@ router.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
       ReturnRequest.countDocuments({ status: 'pending' }),
       Product.countDocuments({ status: 'sold_out' }),
       Product.countDocuments({ stock_quantity: { $gt: 0, $lte: 5 } }),
+      Payment.countDocuments({ status: 'completed' }),
+      Payment.countDocuments({ status: 'completed', created_at: { $gte: monthStart } }),
     ]);
 
     const totalRevenueResult = await Payment.aggregate([
@@ -223,7 +225,9 @@ router.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
 
     res.json({
       revenue: { total: totalRevenueResult[0]?.total || 0, monthly: monthlyRevenueResult[0]?.total || 0 },
-      orders: { total: totalOrders, pending: pendingOrders, completed: completedOrders },
+      sales: { total: totalRevenueResult[0]?.total || 0, monthly: monthlyRevenueResult[0]?.total || 0 },
+      transactions: { total: totalTransactions, monthly: monthlyTransactions },
+      orders: { total: totalOrders, pending: pendingOrders, completed: completedOrders, successful: completedOrders },
       products: { total: totalProducts, low_stock: lowStockProducts, sold_out: soldOutProducts },
       bookings: { total: totalBookings, pending: pendingBookings },
       customers: { total: totalCustomers },
@@ -1082,16 +1086,20 @@ router.get('/returns', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const returns = await ReturnRequest.find().sort({ created_at: -1 })
       .populate('user_id', 'first_name last_name email')
-      .populate('order_id', 'order_number').lean();
+      .populate('order_id', 'order_number status').lean();
 
     const result = [];
     for (const r of returns) {
       let product_name = '';
       let quantity = 0;
+      let unit_price = 0;
+      let subtotal = 0;
       if (r.order_item_id) {
         const item = await OrderItem.findById(r.order_item_id).populate('product_id', 'name').lean();
         product_name = item?.product_id?.name || '';
         quantity = item?.quantity || 0;
+        unit_price = item?.unit_price || 0;
+        subtotal = item?.subtotal || 0;
       }
       result.push({
         ...r,
@@ -1100,9 +1108,12 @@ router.get('/returns', authenticateToken, requireAdmin, async (req, res) => {
         last_name: r.user_id?.last_name || '',
         email: r.user_id?.email || '',
         order_number: r.order_id?.order_number,
+        order_status: r.order_id?.status || null,
         type: r.request_type || r.type || 'return',
         product_name,
         quantity,
+        unit_price,
+        subtotal,
       });
     }
 
@@ -1116,13 +1127,89 @@ router.get('/returns', authenticateToken, requireAdmin, async (req, res) => {
 router.put('/returns/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { status, admin_notes } = req.body;
-    const returnReq = await ReturnRequest.findByIdAndUpdate(
-      req.params.id,
-      { status, admin_notes },
-      { new: true }
-    ).lean();
+    if (!['pending', 'approved', 'rejected', 'completed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid return request status.' });
+    }
+
+    const returnReq = await ReturnRequest.findById(req.params.id);
     if (!returnReq) return res.status(404).json({ error: 'Return request not found.' });
-    res.json({ ...returnReq, id: returnReq._id });
+
+    const order = await Order.findById(returnReq.order_id);
+    if (!order) return res.status(404).json({ error: 'Linked order not found.' });
+
+    const orderItem = returnReq.order_item_id ? await OrderItem.findById(returnReq.order_item_id).lean() : null;
+
+    if (status === 'approved') {
+      returnReq.status = 'approved';
+      returnReq.admin_notes = admin_notes || null;
+      await returnReq.save();
+
+      if (order.status !== 'returned' && order.status !== 'replaced') {
+        order.status = 'return_requested';
+        await order.save();
+      }
+    }
+
+    if (status === 'rejected') {
+      returnReq.status = 'rejected';
+      returnReq.admin_notes = admin_notes || null;
+      await returnReq.save();
+
+      const otherOpen = await ReturnRequest.countDocuments({
+        order_id: returnReq.order_id,
+        _id: { $ne: returnReq._id },
+        status: { $in: ['pending', 'approved'] },
+      });
+
+      if (otherOpen === 0 && order.status === 'return_requested') {
+        order.status = 'completed';
+        await order.save();
+      }
+    }
+
+    if (status === 'completed') {
+      if (returnReq.status !== 'approved') {
+        return res.status(400).json({ error: 'Request must be approved before marking as completed.' });
+      }
+
+      if (!orderItem) {
+        return res.status(400).json({ error: 'Order item is required to complete this request.' });
+      }
+
+      if (returnReq.request_type === 'return') {
+        const product = await Product.findById(orderItem.product_id);
+        if (product) {
+          const prevQty = Number(product.stock_quantity || 0);
+          product.stock_quantity = prevQty + Number(orderItem.quantity || 0);
+          if (product.stock_quantity > 0 && product.status === 'sold_out') {
+            product.status = 'available';
+          }
+          await product.save();
+
+          await InventoryLog.create({
+            product_id: product._id,
+            change_type: 'restock',
+            quantity_change: Number(orderItem.quantity || 0),
+            previous_quantity: prevQty,
+            new_quantity: product.stock_quantity,
+            notes: `Return request completed (${returnReq._id})`,
+            created_by: req.user.id,
+          });
+        }
+
+        order.status = 'returned';
+      } else {
+        order.status = 'replaced';
+      }
+
+      returnReq.status = 'completed';
+      returnReq.admin_notes = admin_notes || returnReq.admin_notes || null;
+
+      await Promise.all([returnReq.save(), order.save()]);
+    }
+
+    const updated = await ReturnRequest.findById(req.params.id).lean();
+    res.json({ ...updated, id: updated._id });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
   }
@@ -1259,6 +1346,109 @@ router.get('/reports/monthly', authenticateToken, requireAdmin, async (req, res)
     ]);
 
     res.json({ sales_by_month, bookings_by_month, top_products: topProducts });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// Sold products report by month
+router.get('/reports/sold-products', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const monthParam = String(req.query.month || '').trim();
+    const monthMatch = monthParam.match(/^(\d{4})-(\d{2})$/);
+
+    let year;
+    let month;
+    if (monthMatch) {
+      year = Number(monthMatch[1]);
+      month = Number(monthMatch[2]);
+    } else {
+      const now = new Date();
+      year = now.getFullYear();
+      month = now.getMonth() + 1;
+    }
+
+    if (month < 1 || month > 12) {
+      return res.status(400).json({ error: 'Invalid month value.' });
+    }
+
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 1);
+
+    const soldOrders = await Order.find({
+      status: { $in: ['completed', 'delivered'] },
+      updated_at: { $gte: startDate, $lt: endDate },
+    }).select('_id').lean();
+
+    const orderIds = soldOrders.map(order => order._id);
+
+    if (!orderIds.length) {
+      return res.json({
+        month: `${year}-${String(month).padStart(2, '0')}`,
+        summary: {
+          orders_count: 0,
+          products_count: 0,
+          units_sold: 0,
+          revenue: 0,
+        },
+        rows: [],
+      });
+    }
+
+    const rows = await OrderItem.aggregate([
+      { $match: { order_id: { $in: orderIds } } },
+      {
+        $group: {
+          _id: '$product_id',
+          total_quantity: { $sum: '$quantity' },
+          total_revenue: { $sum: '$subtotal' },
+          orders: { $addToSet: '$order_id' },
+        },
+      },
+      { $lookup: { from: 'products', localField: '_id', foreignField: '_id', as: 'product' } },
+      { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
+      { $lookup: { from: 'categories', localField: 'product.category_id', foreignField: '_id', as: 'category' } },
+      { $unwind: { path: '$category', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          product_id: '$_id',
+          product_name: { $ifNull: ['$product.name', 'Unknown Product'] },
+          category_name: { $ifNull: ['$category.name', 'Uncategorized'] },
+          product_type: { $ifNull: ['$product.type', 'general'] },
+          total_quantity: 1,
+          total_revenue: 1,
+          orders_count: { $size: '$orders' },
+        },
+      },
+      { $sort: { total_quantity: -1, total_revenue: -1, product_name: 1 } },
+    ]);
+
+    const summary = rows.reduce((acc, row) => {
+      acc.units_sold += Number(row.total_quantity || 0);
+      acc.revenue += Number(row.total_revenue || 0);
+      return acc;
+    }, {
+      orders_count: orderIds.length,
+      products_count: rows.length,
+      units_sold: 0,
+      revenue: 0,
+    });
+
+    res.json({
+      month: `${year}-${String(month).padStart(2, '0')}`,
+      summary: {
+        orders_count: summary.orders_count,
+        products_count: summary.products_count,
+        units_sold: Number(summary.units_sold.toFixed(2)),
+        revenue: Number(summary.revenue.toFixed(2)),
+      },
+      rows: rows.map(row => ({
+        ...row,
+        product_id: row.product_id,
+        total_quantity: Number(row.total_quantity || 0),
+        total_revenue: Number(Number(row.total_revenue || 0).toFixed(2)),
+      })),
+    });
   } catch (err) {
     res.status(500).json({ error: 'Server error.' });
   }

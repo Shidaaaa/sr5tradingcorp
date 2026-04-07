@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../api';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { FiCalendar, FiTrendingUp, FiDollarSign } from 'react-icons/fi';
+import { FiCalendar, FiTrendingUp, FiDollarSign, FiDownload } from 'react-icons/fi';
 
 const formatPrice = (price) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(price);
 const COLORS = ['#1e40af', '#f97316', '#10b981', '#ef4444', '#8b5cf6', '#06b6d4'];
@@ -21,6 +21,100 @@ export default function AdminReports() {
     } catch {} finally { setLoading(false); }
   };
 
+  const downloadCsv = (filename, headers, rows) => {
+    const escape = (value) => {
+      if (value === null || value === undefined) return '';
+      const text = String(value).replace(/"/g, '""');
+      return /[",\n]/.test(text) ? `"${text}"` : text;
+    };
+
+    const csv = [headers.join(','), ...rows.map(row => row.map(escape).join(','))].join('\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportMonthlyReports = () => {
+    if (!monthly) return;
+
+    downloadCsv(
+      'monthly-sales-by-month.csv',
+      ['Month', 'Total Revenue', 'Transactions'],
+      (monthly.sales_by_month || []).map(item => [
+        item.month,
+        Number(item.total_revenue || 0).toFixed(2),
+        item.transactions || 0,
+      ])
+    );
+
+    downloadCsv(
+      'monthly-bookings-by-month.csv',
+      ['Month', 'Total Bookings'],
+      (monthly.bookings_by_month || []).map(item => [
+        item.month,
+        item.total_bookings || 0,
+      ])
+    );
+
+    downloadCsv(
+      'monthly-top-products.csv',
+      ['Rank', 'Product Name', 'Units Sold', 'Revenue'],
+      (monthly.top_products || []).map((item, index) => [
+        index + 1,
+        item.product_name,
+        item.total_quantity || 0,
+        Number(item.total_revenue || 0).toFixed(2),
+      ])
+    );
+  };
+
+  const exportRevenueReports = () => {
+    if (!revenue) return;
+
+    downloadCsv(
+      'revenue-summary.csv',
+      ['Metric', 'Value'],
+      [
+        ['Total Revenue', Number(revenue.total_revenue || 0).toFixed(2)],
+        ['Monthly Revenue', Number(revenue.monthly_revenue || 0).toFixed(2)],
+        ['Total Orders', revenue.total_orders || 0],
+      ]
+    );
+
+    downloadCsv(
+      'revenue-by-payment-method.csv',
+      ['Payment Method', 'Revenue'],
+      (revenue.revenue_by_method || []).map(item => [
+        (item.payment_method || 'unknown').replace('_', ' '),
+        Number(item.total || 0).toFixed(2),
+      ])
+    );
+
+    downloadCsv(
+      'revenue-by-product-type.csv',
+      ['Product Type', 'Revenue'],
+      (revenue.revenue_by_type || []).map(item => [
+        item.type || 'other',
+        Number(item.total || 0).toFixed(2),
+      ])
+    );
+
+    downloadCsv(
+      'daily-revenue-last-30-days.csv',
+      ['Date', 'Revenue'],
+      (revenue.daily_revenue || []).map(item => [
+        item.date,
+        Number(item.total || 0).toFixed(2),
+      ])
+    );
+  };
+
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-accent-500"></div></div>;
 
   return (
@@ -31,6 +125,12 @@ export default function AdminReports() {
         {[['monthly', 'Monthly Reports'], ['revenue', 'Revenue Report']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} className={`btn-sm ${tab === k ? 'btn-primary' : 'btn-secondary'}`}>{l}</button>
         ))}
+        <button
+          onClick={tab === 'monthly' ? exportMonthlyReports : exportRevenueReports}
+          className="btn-secondary btn-sm inline-flex items-center gap-2"
+        >
+          <FiDownload size={14} /> Export {tab === 'monthly' ? 'Monthly' : 'Revenue'} CSV
+        </button>
       </div>
 
       {tab === 'monthly' && monthly && (

@@ -52,6 +52,7 @@ export const api = {
 
   // Products
   getProducts: (params = '') => apiRequest(`/products${params ? '?' + params : ''}`),
+  getPublicStats: () => apiRequest('/products/meta/stats'),
   getProduct: (id) => apiRequest(`/products/${id}`),
   getCategories: () => apiRequest('/products/meta/categories'),
   createProduct: (data) => apiRequest('/products', { method: 'POST', body: JSON.stringify(data) }),
@@ -77,6 +78,7 @@ export const api = {
 
   // Bookings
   getBookings: () => apiRequest('/bookings'),
+  getBookingAvailability: (month) => apiRequest(`/bookings/availability${month ? `?month=${encodeURIComponent(month)}` : ''}`),
   getReservationFee: (productId) => apiRequest(`/bookings/reservation-fee/${productId}`),
   createBooking: (data) => apiRequest('/bookings', { method: 'POST', body: JSON.stringify(data) }),
   updateBookingStatus: (id, data) => apiRequest(`/bookings/${id}/status`, { method: 'PUT', body: JSON.stringify(data) }),
@@ -131,6 +133,7 @@ export const api = {
     });
     return apiRequest(`/admin/sales${query.toString() ? `?${query.toString()}` : ''}`);
   },
+  getSoldProductsReport: (month) => apiRequest(`/admin/reports/sold-products${month ? `?month=${encodeURIComponent(month)}` : ''}`),
   getMonthlyReport: (year) => apiRequest(`/admin/reports/monthly${year ? '?year=' + year : ''}`),
   getRevenueReport: () => apiRequest('/admin/reports/revenue'),
   uploadAdminPaymentReceipt: async (file) => {

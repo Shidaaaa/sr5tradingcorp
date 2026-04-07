@@ -9,7 +9,7 @@ const InstallmentSchedule = require('../models/InstallmentSchedule');
 const ReturnRequest = require('../models/ReturnRequest');
 const InventoryLog = require('../models/InventoryLog');
 const { authenticateToken } = require('../middleware/auth');
-const { generateOrderNumber, calculateReservationFee } = require('../utils/helpers');
+const { generateOrderNumber, calculateReservationFee, VEHICLE_HOLD_DAYS } = require('../utils/helpers');
 
 const router = express.Router();
 
@@ -35,7 +35,7 @@ function getUniqueCompletedPaymentTotal(payments = []) {
 function getItemReservationExpiry(productType) {
   const now = new Date();
   if (productType === 'vehicle') {
-    now.setDate(now.getDate() + 7);
+    now.setDate(now.getDate() + VEHICLE_HOLD_DAYS);
   } else {
     now.setHours(now.getHours() + 48);
   }
@@ -142,7 +142,7 @@ async function releaseOrderInventory(orderId, userId) {
 }
 
 async function enrichOrder(order) {
-  const items = await OrderItem.find({ order_id: order._id }).populate('product_id', 'name image_url type').lean();
+  const items = await OrderItem.find({ order_id: order._id }).populate('product_id', 'name image_url type category_id').lean();
   const payments = await Payment.find({ order_id: order._id, status: { $in: ['completed', 'pending'] } }).sort({ created_at: -1 }).lean();
   const installmentPlan = await InstallmentPlan.findOne({ order_id: order._id }).lean();
 
@@ -165,6 +165,18 @@ async function enrichOrder(order) {
 
   const totalPaid = getUniqueCompletedPaymentTotal(payments);
 
+  const categoryIds = items
+    .map(i => i.product_id?.category_id)
+    .filter(Boolean)
+    .map(id => String(id));
+  const uniqueCategoryIds = [...new Set(categoryIds)];
+  let categoryNameMap = {};
+  if (uniqueCategoryIds.length) {
+    const Category = require('../models/Category');
+    const categories = await Category.find({ _id: { $in: uniqueCategoryIds } }).lean();
+    categories.forEach(c => { categoryNameMap[String(c._id)] = c.name; });
+  }
+
   order.items = items.map(i => ({
     id: i._id,
     product_id: i.product_id?._id,
@@ -172,6 +184,8 @@ async function enrichOrder(order) {
     product_name: i.product_id?.name,
     product_image: i.product_id?.image_url,
     product_type: i.product_id?.type,
+    category_id: i.product_id?.category_id || null,
+    category_name: i.product_id?.category_id ? (categoryNameMap[String(i.product_id.category_id)] || null) : null,
     quantity: i.quantity,
     unit_price: i.unit_price,
     subtotal: i.subtotal,

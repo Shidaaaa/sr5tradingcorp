@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 
 const VEHICLE_RESERVATION_RATE = 0.05;
+const VEHICLE_HOLD_DAYS = 30;
 
 function generateOrderNumber() {
   const date = new Date();
@@ -26,19 +27,17 @@ function generateReceiptNumber() {
 function getReservationExpiry(productType) {
   const now = new Date();
   if (productType === 'vehicle') {
-    now.setDate(now.getDate() + 7);
+    now.setDate(now.getDate() + VEHICLE_HOLD_DAYS);
   } else {
     now.setHours(now.getHours() + 48);
   }
   return now.toISOString();
 }
 
-// Returns expiry date for a vehicle reservation based on popularity
-// Popular vehicles: 14 days (high demand, shorter hold)
-// Standard vehicles: 7 days
-function getVehicleReservationExpiry(is_popular) {
+// Returns expiry date for a vehicle reservation.
+function getVehicleReservationExpiry() {
   const now = new Date();
-  now.setDate(now.getDate() + (is_popular ? 14 : 7));
+  now.setDate(now.getDate() + VEHICLE_HOLD_DAYS);
   return now;
 }
 
@@ -75,7 +74,7 @@ function calculateInstallmentBreakdown(remainingBalance, options = {}) {
 }
 
 function getMaxReservationDays(productType) {
-  if (productType === 'vehicle') return 7;
+  if (productType === 'vehicle') return VEHICLE_HOLD_DAYS;
   return 90;
 }
 
@@ -103,6 +102,7 @@ module.exports = {
   calculateReservationFee,
   calculateInstallmentBreakdown,
   VEHICLE_RESERVATION_RATE,
+  VEHICLE_HOLD_DAYS,
   getMaxReservationDays,
   addBufferTime,
   formatCurrency

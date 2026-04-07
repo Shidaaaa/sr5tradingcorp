@@ -163,7 +163,7 @@ export default function ProductDetail() {
                   )}
                   {product.type === 'vehicle' ? (
                     <button onClick={handleInquire} className="w-full bg-navy-900 text-white py-3.5 rounded-xl font-semibold hover:bg-navy-800 transition-colors flex items-center justify-center gap-2 text-lg">
-                      <FiShoppingCart /> Inquire
+                      <FiShoppingCart /> Reserve Now
                     </button>
                   ) : (
                     <button onClick={handleAddToCart} className="w-full bg-navy-900 text-white py-3.5 rounded-xl font-semibold hover:bg-navy-800 transition-colors flex items-center justify-center gap-2 text-lg">

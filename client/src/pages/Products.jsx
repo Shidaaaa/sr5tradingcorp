@@ -34,6 +34,16 @@ export default function Products({ filterType, browseCategory }) {
     type: filterType || searchParams.get('type') || '',
   });
 
+  useEffect(() => {
+    setFilters((prev) => ({
+      ...prev,
+      search: searchParams.get('search') || '',
+      category: searchParams.get('category') || '',
+      sort: searchParams.get('sort') || '',
+      type: filterType || searchParams.get('type') || '',
+    }));
+  }, [searchParams, filterType]);
+
   const pageTitle = browseCategory ? PAGE_TITLES[browseCategory] || browseCategory : filterType === 'vehicle' ? 'Vehicles' : 'All Products';
   const pageDesc = browseCategory ? `Discover our range of ${pageTitle.toLowerCase()} products` : filterType === 'vehicle' ? 'Browse our quality imported vehicles' : 'Browse our wide selection of products';
 
@@ -219,7 +229,7 @@ export default function Products({ filterType, browseCategory }) {
                         onClick={(e) => product.type === 'vehicle' ? handleInquire(e, product) : handleAddToCart(e, product.id)}
                         className="w-full mt-3 py-2 bg-navy-900 text-white text-sm font-medium rounded-lg hover:bg-navy-800 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100"
                       >
-                        <FiShoppingCart size={14} /> {product.type === 'vehicle' ? 'Inquire' : 'Add to Cart'}
+                        <FiShoppingCart size={14} /> {product.type === 'vehicle' ? 'Reserve Now' : 'Add to Cart'}
                       </button>
                     )}
                   </div>

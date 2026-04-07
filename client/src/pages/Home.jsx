@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { FiUsers, FiShoppingCart, FiCalendar, FiMapPin, FiChevronDown, FiArrowRight, FiHeart, FiAward, FiMap } from 'react-icons/fi';
+import { api } from '../api';
 
 const heroSlides = [
   {
@@ -33,12 +34,12 @@ const heroSlides = [
   },
 ];
 
-const stats = [
-  { icon: <FiUsers size={28} />, value: 18, label: 'Users' },
-  { icon: <FiShoppingCart size={28} />, value: 36, label: 'Transactions' },
-  { icon: <FiCalendar size={28} />, value: 9, label: 'Appointments' },
-  { icon: <FiMapPin size={28} />, value: 3, label: 'Locations' },
-];
+const DEFAULT_STATS = {
+  users: 0,
+  transactions: 0,
+  appointments: 0,
+  locations: 3,
+};
 
 const faqs = [
   { q: 'What services do you offer?', a: 'We offer a wide range of services including vehicle sales, parts and accessories, test drive bookings, upholstery, airconditioning, tinsmith, painting, and mechanic services.' },
@@ -78,6 +79,7 @@ function AnimatedCounter({ target, duration = 2000 }) {
 export default function Home() {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [openFaq, setOpenFaq] = useState(null);
+  const [stats, setStats] = useState(DEFAULT_STATS);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -85,6 +87,31 @@ export default function Home() {
     }, 5000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const data = await api.getPublicStats();
+        setStats({
+          users: Number(data?.users || 0),
+          transactions: Number(data?.transactions || 0),
+          appointments: Number(data?.appointments || 0),
+          locations: Number(data?.locations || 3),
+        });
+      } catch {
+        setStats(DEFAULT_STATS);
+      }
+    };
+
+    fetchStats();
+  }, []);
+
+  const statsCards = [
+    { icon: <FiUsers size={28} />, value: stats.users, label: 'Users' },
+    { icon: <FiShoppingCart size={28} />, value: stats.transactions, label: 'Transactions' },
+    { icon: <FiCalendar size={28} />, value: stats.appointments, label: 'Appointments' },
+    { icon: <FiMapPin size={28} />, value: stats.locations, label: 'Locations' },
+  ];
 
   return (
     <div>
@@ -149,7 +176,7 @@ export default function Home() {
       <section className="bg-navy-900 py-16">
         <div className="max-w-5xl mx-auto px-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-            {stats.map((stat, i) => (
+            {statsCards.map((stat, i) => (
               <div key={i} className="text-center">
                 <div className="inline-flex items-center justify-center w-16 h-16 bg-navy-800 rounded-2xl text-accent-400 mb-4">
                   {stat.icon}
