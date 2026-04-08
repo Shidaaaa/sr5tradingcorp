@@ -29,9 +29,20 @@ export default function Checkout() {
     delivery_contact_phone: user?.phone || '',
     customer_delivery_platform: '',
     customer_delivery_reference: '',
-    payment_method: 'credit_card',
+    payment_method: 'cash',
     notes: '',
   });
+
+  const rememberPaymongoCheckout = (session, type) => {
+    if (!session?.sessionId) return;
+
+    localStorage.setItem('sr5_paymongo_pending_session', JSON.stringify({
+      session_id: session.sessionId,
+      checkout_reference: session.checkout_reference || null,
+      type,
+      created_at: Date.now(),
+    }));
+  };
 
   const inquiryProductId = searchParams.get('inquire_product_id');
   const inquiryQty = Math.max(1, Number(searchParams.get('quantity') || 1));
@@ -95,10 +106,10 @@ export default function Checkout() {
   }, [inquiryProductId, inquiryQty, navigate]);
 
   useEffect(() => {
-    if (hasVehicleOrder && !['credit_card', 'debit_card'].includes(form.payment_method)) {
-      setForm(prev => ({ ...prev, payment_method: 'credit_card' }));
+    if (hasVehicleOrder && !['cash', 'bank_transfer'].includes(form.payment_method)) {
+      setForm(prev => ({ ...prev, payment_method: 'cash' }));
     }
-  }, [hasVehicleOrder]);
+  }, [hasVehicleOrder, form.payment_method]);
 
   useEffect(() => {
     if (!hasVehicleOrder) return;
@@ -149,11 +160,10 @@ export default function Checkout() {
       orderId = data.id || data._id;
       if (!inquiryItem) await fetchCart();
 
-      // Vehicle orders require reservation fee payment online.
+      // Vehicle reservations are created first, then payment is coordinated by admin/store.
       if (data.has_vehicle && data.reservation_fee_total > 0) {
-        toast('Redirecting to secure payment...');
-        const session = await api.createStripeOrderReservationSession({ order_id: orderId });
-        window.location.href = session.url;
+        toast.success('Vehicle reservation submitted. Please settle the reservation fee with admin/store.');
+        navigate(`/orders/${orderId}`);
         return;
       }
 
@@ -165,10 +175,18 @@ export default function Checkout() {
         return;
       }
 
+      if (form.payment_method === 'gcash') {
+        toast('Redirecting to GCash checkout...');
+        const session = await api.createGcashSession({ order_id: orderId });
+        rememberPaymongoCheckout(session, 'order');
+        window.location.href = session.url;
+        return;
+      }
+
       toast.success('Order placed successfully!');
       navigate(`/orders/${orderId}`);
     } catch (err) {
-      if (orderId && (form.payment_method === 'credit_card' || form.payment_method === 'debit_card')) {
+      if (orderId && (form.payment_method === 'credit_card' || form.payment_method === 'debit_card' || form.payment_method === 'gcash')) {
         toast.error(`${err.message} You can retry payment from your order details.`);
         navigate(`/orders/${orderId}`);
         return;
@@ -263,10 +281,10 @@ export default function Checkout() {
               <div className="rounded-lg border border-accent-200 bg-accent-50 p-4 mb-4">
                 <p className="font-semibold text-accent-800">Vehicle Reservation Fee Required</p>
                 <p className="text-sm text-accent-700 mt-1">
-                  Reservation fee total: <strong>{formatPrice(reservationFeeTotal)}</strong>. This must be paid online to secure your vehicle order.
+                  Reservation fee total: <strong>{formatPrice(reservationFeeTotal)}</strong>. This is settled with admin/store.
                 </p>
                 <p className="text-xs text-accent-600 mt-1">
-                  Vehicle reservation period: <strong>1 week</strong>. Parts/accessories reservation period: <strong>48 hours</strong>.
+                  Card and GCash are unavailable for vehicle reservation and are only enabled for monthly installment payments.
                 </p>
               </div>
             )}
@@ -274,14 +292,14 @@ export default function Checkout() {
             <div className="grid grid-cols-2 gap-3">
               {(hasVehicleOrder
                 ? [
-                    { value: 'credit_card', label: 'Credit Card', desc: 'Visa, Mastercard (online)' },
-                    { value: 'debit_card', label: 'Debit Card', desc: 'Bank debit cards (online)' },
+                    { value: 'cash', label: 'Cash', desc: 'Pay at store/admin counter' },
+                    { value: 'bank_transfer', label: 'Bank Transfer', desc: 'Coordinate transfer with admin' },
                   ]
                 : [
                     { value: 'cash', label: 'Cash', desc: 'Pay on pickup' },
                     { value: 'credit_card', label: 'Credit Card', desc: 'Visa, Mastercard' },
                     { value: 'debit_card', label: 'Debit Card', desc: 'Bank debit cards' },
-                    { value: 'ewallet', label: 'E-Wallet', desc: 'GCash, Maya, etc.' },
+                    { value: 'gcash', label: 'GCash', desc: 'PayMongo GCash checkout' },
                     { value: 'bank_transfer', label: 'Bank Transfer', desc: 'Direct bank transfer' },
                     { value: 'installment', label: 'Installment', desc: 'Monthly payment plan' },
                   ]).map(pm => (
@@ -335,7 +353,7 @@ export default function Checkout() {
                   <span className="font-medium">{formatPrice(reservationFeeTotal)}</span>
                 </div>
                 <div className="flex justify-between font-bold text-lg pt-2 border-t">
-                  <span>Pay Now</span>
+                  <span>Reservation Fee Due</span>
                   <span className="text-accent-600">{formatPrice(reservationFeeTotal)}</span>
                 </div>
               </div>
@@ -351,9 +369,11 @@ export default function Checkout() {
                 : inquiryLoading
                   ? 'Loading inquiry...'
                 : hasVehicleOrder
-                  ? <><FiCreditCard /> Pay Reservation Fee Online</>
+                  ? <><FiCheck /> Place Vehicle Reservation</>
                   : (form.payment_method === 'credit_card' || form.payment_method === 'debit_card')
                     ? <><FiCreditCard /> Pay with Card</>
+                    : form.payment_method === 'gcash'
+                      ? <><FiCreditCard /> Pay with GCash</>
                     : <><FiCheck /> Place Order</>
               }
             </button>

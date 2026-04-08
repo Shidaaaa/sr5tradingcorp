@@ -1,4 +1,5 @@
-const API_BASE = '/api';
+const rawApiBase = String(import.meta.env.VITE_API_BASE_URL || '/api').trim();
+const API_BASE = rawApiBase.endsWith('/') ? rawApiBase.slice(0, -1) : rawApiBase;
 
 async function apiRequest(endpoint, options = {}) {
   const token = localStorage.getItem('sr5_token');
@@ -91,12 +92,16 @@ export const api = {
   getReceipt: (receiptNumber) => apiRequest(`/payments/receipt/${receiptNumber}`),
   createStripeSession: (data) => apiRequest('/payments/stripe/create-session', { method: 'POST', body: JSON.stringify(data) }),
   verifyStripePayment: (data) => apiRequest('/payments/stripe/verify', { method: 'POST', body: JSON.stringify(data) }),
+  createGcashSession: (data) => apiRequest('/payments/gcash/create-session', { method: 'POST', body: JSON.stringify(data) }),
+  verifyGcashPayment: (data) => apiRequest('/payments/gcash/verify', { method: 'POST', body: JSON.stringify(data) }),
   getStripeConfig: () => apiRequest('/payments/stripe/config'),
   createStripeReservationSession: (data) => apiRequest('/payments/stripe/create-reservation-session', { method: 'POST', body: JSON.stringify(data) }),
   verifyStripeReservationPayment: (data) => apiRequest('/payments/stripe/verify-reservation', { method: 'POST', body: JSON.stringify(data) }),
   createStripeOrderReservationSession: (data) => apiRequest('/payments/stripe/create-order-reservation-session', { method: 'POST', body: JSON.stringify(data) }),
   verifyStripeOrderReservationPayment: (data) => apiRequest('/payments/stripe/verify-order-reservation', { method: 'POST', body: JSON.stringify(data) }),
+  createGcashOrderReservationSession: (data) => apiRequest('/payments/gcash/create-order-reservation-session', { method: 'POST', body: JSON.stringify(data) }),
   createStripeInstallmentSession: (data) => apiRequest('/payments/stripe/create-installment-session', { method: 'POST', body: JSON.stringify(data) }),
+  createGcashInstallmentSession: (data) => apiRequest('/payments/gcash/create-installment-session', { method: 'POST', body: JSON.stringify(data) }),
   verifyStripeInstallmentPayment: (data) => apiRequest('/payments/stripe/verify-installment', { method: 'POST', body: JSON.stringify(data) }),
 
   // Feedback

@@ -32,13 +32,23 @@ export default function OrderDetail() {
   const [loading, setLoading] = useState(true);
   const [showPayment, setShowPayment] = useState(false);
   const [showReturn, setShowReturn] = useState(false);
-  const [processingReservation, setProcessingReservation] = useState(false);
-  const [processingInstallmentCard, setProcessingInstallmentCard] = useState(false);
+  const [processingInstallmentMethod, setProcessingInstallmentMethod] = useState(null);
   const [confirmingReceived, setConfirmingReceived] = useState(false);
   const [reordering, setReordering] = useState(false);
   const [returnRequests, setReturnRequests] = useState([]);
   const [paymentForm, setPaymentForm] = useState({ amount: '', payment_method: 'cash', payment_type: 'full' });
   const [returnForm, setReturnForm] = useState({ order_item_id: '', reason: '', request_type: 'return' });
+
+  const rememberPaymongoCheckout = (session, type) => {
+    if (!session?.sessionId) return;
+
+    localStorage.setItem('sr5_paymongo_pending_session', JSON.stringify({
+      session_id: session.sessionId,
+      checkout_reference: session.checkout_reference || null,
+      type,
+      created_at: Date.now(),
+    }));
+  };
 
   useEffect(() => { fetchOrder(); }, [id]);
 
@@ -68,15 +78,40 @@ export default function OrderDetail() {
     fetchReturnRequests();
   }, [id]);
 
+  useEffect(() => {
+    if (!order) return;
+
+    const allowedMethods = (order.has_vehicle && order.payment_method !== 'installment')
+      ? ['cash', 'bank_transfer']
+      : ['cash', 'credit_card', 'debit_card', 'gcash', 'bank_transfer'];
+
+    if (!allowedMethods.includes(paymentForm.payment_method)) {
+      setPaymentForm(prev => ({ ...prev, payment_method: allowedMethods[0] }));
+    }
+  }, [order, paymentForm.payment_method]);
+
   const handlePayment = async (e) => {
     e.preventDefault();
     try {
+      if (order.has_vehicle && ['credit_card', 'debit_card', 'gcash'].includes(paymentForm.payment_method)) {
+        toast.error('Card and GCash for vehicle orders are only available for monthly installment payments.');
+        return;
+      }
+
       // For card payments, redirect to Stripe Checkout
       if (paymentForm.payment_method === 'credit_card' || paymentForm.payment_method === 'debit_card') {
         const session = await api.createStripeSession({ order_id: order.id });
         window.location.href = session.url;
         return;
       }
+
+      if (paymentForm.payment_method === 'gcash') {
+        const session = await api.createGcashSession({ order_id: order.id });
+        rememberPaymongoCheckout(session, 'order');
+        window.location.href = session.url;
+        return;
+      }
+
       const data = await api.processPayment({ order_id: order.id, ...paymentForm, amount: Number(paymentForm.amount) });
       toast.success('Payment processed!');
       setShowPayment(false);
@@ -106,25 +141,17 @@ export default function OrderDetail() {
     setShowReturn(true);
   };
 
-  const handleReservationPayment = async () => {
+  const handleInstallmentOnlinePayment = async (method = 'card') => {
     try {
-      setProcessingReservation(true);
-      const session = await api.createStripeOrderReservationSession({ order_id: order.id });
+      setProcessingInstallmentMethod(method);
+      const session = method === 'gcash'
+        ? await api.createGcashInstallmentSession({ order_id: order.id })
+        : await api.createStripeInstallmentSession({ order_id: order.id });
+      if (method === 'gcash') rememberPaymongoCheckout(session, 'installment');
       window.location.href = session.url;
     } catch (err) {
-      toast.error(err.message);
-      setProcessingReservation(false);
-    }
-  };
-
-  const handleInstallmentCardPayment = async () => {
-    try {
-      setProcessingInstallmentCard(true);
-      const session = await api.createStripeInstallmentSession({ order_id: order.id });
-      window.location.href = session.url;
-    } catch (err) {
-      toast.error(err.message || 'Unable to start installment card payment.');
-      setProcessingInstallmentCard(false);
+      toast.error(err.message || `Unable to start installment ${method === 'gcash' ? 'GCash' : 'card'} payment.`);
+      setProcessingInstallmentMethod(null);
     }
   };
 
@@ -170,7 +197,7 @@ export default function OrderDetail() {
   const nextInstallmentAmountDue = nextInstallmentRow
     ? Math.max(0, Number(nextInstallmentRow.amount_due || 0) - Number(nextInstallmentRow.amount_paid || 0))
     : 0;
-  const canPayInstallmentByCard = Boolean(
+  const canPayInstallmentOnline = Boolean(
     order.payment_method === 'installment'
     && order.installment_plan
     && order.installment_plan.down_payment_paid
@@ -179,6 +206,19 @@ export default function OrderDetail() {
     && nextInstallmentAmountDue > 0
     && !['cancelled', 'returned', 'replaced', 'completed'].includes(order.status)
   );
+  const isVehicleNonInstallmentOrder = Boolean(order.has_vehicle && order.payment_method !== 'installment');
+  const paymentMethodOptions = isVehicleNonInstallmentOrder
+    ? [
+        { value: 'cash', label: 'Cash' },
+        { value: 'bank_transfer', label: 'Bank Transfer' },
+      ]
+    : [
+        { value: 'cash', label: 'Cash' },
+        { value: 'credit_card', label: 'Credit Card' },
+        { value: 'debit_card', label: 'Debit Card' },
+        { value: 'gcash', label: 'GCash' },
+        { value: 'bank_transfer', label: 'Bank Transfer' },
+      ];
 
   const canRequestReturn = ['completed', 'delivered', 'picked_up', 'return_requested'].includes(order.status);
   const eligibleReturnItems = (order.items || []).filter(item => ['parts', 'tools'].includes(item.product_type));
@@ -250,6 +290,11 @@ export default function OrderDetail() {
             {order.reservation_fee_paid && !order.payment_method && order.remaining_balance > 0 && (
               <p className="text-accent-800 mt-2 font-medium">
                 Reservation secured! Please visit SR-5 store to arrange your remaining payment.
+              </p>
+            )}
+            {!order.reservation_fee_paid && !['cancelled', 'returned'].includes(order.status) && (
+              <p className="text-accent-800 mt-2 font-medium">
+                Reservation fee collection is handled by admin/store. Online card and GCash are disabled for this step.
               </p>
             )}
           </div>
@@ -368,16 +413,24 @@ export default function OrderDetail() {
         {/* Actions */}
         <div className="flex flex-wrap gap-3">
           {order.has_vehicle && !order.reservation_fee_paid && !['cancelled', 'returned'].includes(order.status) && (
-            <button onClick={handleReservationPayment} disabled={processingReservation} className="btn-primary btn-sm flex items-center gap-1">
-              <FiCreditCard size={14} /> {processingReservation ? 'Redirecting...' : `Pay Reservation Fee ${formatPrice(order.reservation_fee_total || 0)}`}
-            </button>
+            <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Reservation fee payment is coordinated with admin/store. Online card and GCash are only available for monthly installment payments.
+            </div>
           )}
-          {canPayInstallmentByCard && (
-            <button onClick={handleInstallmentCardPayment} disabled={processingInstallmentCard} className="btn-primary btn-sm flex items-center gap-1">
+          {canPayInstallmentOnline && (
+            <button onClick={() => handleInstallmentOnlinePayment('card')} disabled={processingInstallmentMethod !== null} className="btn-primary btn-sm flex items-center gap-1">
               <FiCreditCard size={14} />
-              {processingInstallmentCard
+              {processingInstallmentMethod === 'card'
                 ? 'Redirecting...'
                 : `Pay Month ${nextInstallmentRow.installment_number} via Card (${formatPrice(nextInstallmentAmountDue)})`}
+            </button>
+          )}
+          {canPayInstallmentOnline && (
+            <button onClick={() => handleInstallmentOnlinePayment('gcash')} disabled={processingInstallmentMethod !== null} className="btn-secondary btn-sm flex items-center gap-1">
+              <FiCreditCard size={14} />
+              {processingInstallmentMethod === 'gcash'
+                ? 'Redirecting...'
+                : `Pay Month ${nextInstallmentRow.installment_number} via GCash (${formatPrice(nextInstallmentAmountDue)})`}
             </button>
           )}
           {order.remaining_balance > 0 && !['cancelled', 'returned'].includes(order.status) && (!order.has_vehicle || order.reservation_fee_paid) && order.payment_method !== 'installment' && (
@@ -417,12 +470,15 @@ export default function OrderDetail() {
             <div>
               <label className="block text-sm font-medium mb-1">Payment Method</label>
               <select value={paymentForm.payment_method} onChange={e => setPaymentForm({ ...paymentForm, payment_method: e.target.value })} className="input-field">
-                <option value="cash">Cash</option>
-                <option value="credit_card">Credit Card</option>
-                <option value="debit_card">Debit Card</option>
-                <option value="ewallet">E-Wallet</option>
-                <option value="bank_transfer">Bank Transfer</option>
+                {paymentMethodOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
+              {isVehicleNonInstallmentOrder && (
+                <p className="text-xs text-gray-500 mt-1">
+                  For vehicle orders, online card and GCash are reserved for monthly installment payments only.
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Payment Type</label>

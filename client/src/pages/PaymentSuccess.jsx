@@ -13,30 +13,47 @@ export default function PaymentSuccess() {
   const verifiedKeyRef = useRef(null);
 
   useEffect(() => {
-    const sessionId = searchParams.get('session_id');
-    const type = searchParams.get('type');
+    const provider = searchParams.get('provider') || 'stripe';
+    const pendingPaymongo = provider === 'paymongo'
+      ? (() => {
+          try {
+            return JSON.parse(localStorage.getItem('sr5_paymongo_pending_session') || 'null');
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+
+    const sessionId = searchParams.get('session_id') || pendingPaymongo?.session_id || null;
+    const type = searchParams.get('type') || pendingPaymongo?.type || null;
+    const checkoutReference = searchParams.get('checkout_ref') || pendingPaymongo?.checkout_reference || null;
 
     if (sessionId) {
-      const verifyKey = `${sessionId}:${type || 'order'}`;
+      const verifyKey = `${sessionId}:${type || 'order'}:${provider}:${checkoutReference || 'none'}`;
       if (verifiedKeyRef.current === verifyKey) return;
       verifiedKeyRef.current = verifyKey;
-      verifyPayment(sessionId, type);
+      verifyPayment(sessionId, type, provider, checkoutReference);
     } else {
       setError('No payment session found.');
       setLoading(false);
     }
   }, [searchParams]);
 
-  const verifyPayment = async (sessionId, type) => {
+  const verifyPayment = async (sessionId, type, provider, checkoutReference) => {
     try {
-      const data = type === 'reservation'
-        ? await api.verifyStripeReservationPayment({ session_id: sessionId })
-        : type === 'order_reservation'
-          ? await api.verifyStripeOrderReservationPayment({ session_id: sessionId })
-          : type === 'installment'
-            ? await api.verifyStripeInstallmentPayment({ session_id: sessionId })
-          : await api.verifyStripePayment({ session_id: sessionId });
+      const data = provider === 'paymongo'
+        ? await api.verifyGcashPayment({ session_id: sessionId, checkout_reference: checkoutReference })
+        : type === 'reservation'
+          ? await api.verifyStripeReservationPayment({ session_id: sessionId })
+          : type === 'order_reservation'
+            ? await api.verifyStripeOrderReservationPayment({ session_id: sessionId })
+            : type === 'installment'
+              ? await api.verifyStripeInstallmentPayment({ session_id: sessionId })
+              : await api.verifyStripePayment({ session_id: sessionId });
       setPayment(data);
+      if (provider === 'paymongo') {
+        localStorage.removeItem('sr5_paymongo_pending_session');
+      }
     } catch (err) {
       setError(err.message || 'Failed to verify payment.');
     } finally {
@@ -52,6 +69,8 @@ export default function PaymentSuccess() {
       </div>
     );
   }
+
+  const isPaymongo = searchParams.get('provider') === 'paymongo';
 
   if (error) {
     return (
@@ -75,7 +94,9 @@ export default function PaymentSuccess() {
               ? 'Vehicle Reservation Secured!'
               : searchParams.get('type') === 'installment'
                 ? 'Installment Paid Successfully!'
-              : 'Payment Successful!'}
+              : isPaymongo
+                ? 'GCash Payment Successful!'
+                : 'Payment Successful!'}
         </h1>
         <p className="text-gray-600 mb-6">
           {searchParams.get('type') === 'reservation'
@@ -83,8 +104,10 @@ export default function PaymentSuccess() {
             : searchParams.get('type') === 'order_reservation'
               ? 'Your order reservation fee is paid. Your vehicle is now reserved under your order.'
               : searchParams.get('type') === 'installment'
-                ? `Your monthly installment has been posted${payment?.installment_number ? ` for Month ${payment.installment_number}` : ''}.`
-            : 'Your payment has been processed and your order is confirmed.'}
+                ? `Payment for this month is successful${payment?.installment_number ? ` (Month ${payment.installment_number})` : ''}.`
+                : isPaymongo
+                  ? 'Your PayMongo GCash payment has been processed and posted to your order.'
+                  : 'Your payment has been processed and your order is confirmed.'}
         </p>
 
         {payment && (
