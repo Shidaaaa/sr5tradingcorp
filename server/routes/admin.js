@@ -18,7 +18,7 @@ const InstallmentSchedule = require('../models/InstallmentSchedule');
 const { calculateInstallmentBreakdown, generateReceiptNumber } = require('../utils/helpers');
 
 const router = express.Router();
-const ADMIN_INSTORE_PAYMENT_METHODS = ['cash', 'bank_transfer', 'credit_card', 'debit_card'];
+const ADMIN_INSTORE_PAYMENT_METHODS = ['cash', 'bank_transfer', 'credit_card', 'debit_card', 'gcash'];
 const paymentReceiptDir = path.join(__dirname, '..', 'uploads', 'payment-receipts');
 
 if (!fs.existsSync(paymentReceiptDir)) {

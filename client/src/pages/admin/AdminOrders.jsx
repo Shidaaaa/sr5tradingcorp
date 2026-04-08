@@ -352,6 +352,7 @@ export default function AdminOrders() {
                         <option value="bank_transfer">Bank Transfer</option>
                         <option value="credit_card">Credit Card</option>
                         <option value="debit_card">Debit Card</option>
+                        <option value="gcash">GCash</option>
                       </select>
                       <input value={installmentReference} onChange={e => setInstallmentReference(e.target.value)} className="input-field" placeholder="Reference # (optional)" />
                       <button onClick={handleRecordDownPayment} className="btn-primary btn-sm">Record {formatPrice(selected.installment_plan.down_payment_amount)}</button>
@@ -438,6 +439,7 @@ export default function AdminOrders() {
                 <option value="bank_transfer">Bank Transfer</option>
                 <option value="credit_card">Credit Card</option>
                 <option value="debit_card">Debit Card</option>
+                <option value="gcash">GCash</option>
               </select>
             </div>
 
@@ -506,6 +508,7 @@ export default function AdminOrders() {
                     <option value="bank_transfer">Bank Transfer</option>
                     <option value="credit_card">Credit Card</option>
                     <option value="debit_card">Debit Card</option>
+                    <option value="gcash">GCash</option>
                   </select>
                 </div>
                 <div>

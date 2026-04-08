@@ -258,6 +258,7 @@ export default function AdminSales() {
             <option value="cash">Cash</option>
             <option value="credit_card">Credit Card</option>
             <option value="debit_card">Debit Card</option>
+            <option value="gcash">GCash</option>
             <option value="ewallet">E-Wallet</option>
             <option value="bank_transfer">Bank Transfer</option>
             <option value="installment">Installment</option>
