@@ -9,6 +9,8 @@ node_modules/
 server/.env
 client/.env
 client/.env.*
+!server/.env.example
+!client/.env.example
 
 # Build outputs and caches
 dist/
@@ -28,6 +30,7 @@ pnpm-debug.log*
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+server/uploads/
 
 # OS/editor files
 .DS_Store

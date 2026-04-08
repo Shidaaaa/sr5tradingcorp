@@ -8,8 +8,27 @@ const { startInstallmentReminderJob } = require('./services/installmentReminderJ
 
 const app = express();
 
+const defaultCorsOrigins = ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'];
+const envCorsOrigins = String(process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+const allowedCorsOrigins = envCorsOrigins.length ? envCorsOrigins : defaultCorsOrigins;
+
+function corsOriginValidator(origin, callback) {
+  // Allow same-origin/server-to-server requests that do not send an Origin header.
+  if (!origin) return callback(null, true);
+  if (allowedCorsOrigins.includes(origin)) return callback(null, true);
+  return callback(new Error('Origin not allowed by CORS policy.'));
+}
+
 // Middleware
-app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'], credentials: true }));
+app.disable('x-powered-by');
+app.use(cors({
+  origin: corsOriginValidator,
+  credentials: true,
+}));
+app.use('/api/payments/paymongo/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
